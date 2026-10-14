@@ -1,0 +1,67 @@
+# GitHub Actions workflow template.
+# Copy this file to  .github/workflows/reproduce.yml  at your repository root.
+#
+# On every push, a blank GitHub-hosted runner checks out only what is committed,
+# re-runs the pipeline from the raw inputs, compares the declared outputs, rebuilds
+# the showcase, and publishes it.
+#
+# Free runners are limited (~2-4 vCPU, ~7-16 GB RAM, ~14 GB disk, no GPU, 6 h/job).
+# If the full analysis does not fit, point `runs-on` at a self-hosted or larger
+# runner, or reproduce a declared representative subset and say so in the badge.
+name: reproduce
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Move reference outputs aside
+        # Remove the committed answer from the package before re-running.
+        run: mv results "$RUNNER_TEMP/reference-outputs"
+
+      - name: Reconstruct environment and re-run from raw inputs
+        # run.sh owns dependency installation as well as the ordered analysis
+        # steps, so local and CI reproduction use exactly the same command.
+        run: bash run.sh
+
+      - name: Compare regenerated outputs against reference
+        run: python3 check.py results "$RUNNER_TEMP/reference-outputs"
+
+      - name: Build showcase site
+        # build_site.py is the package's own analysis-specific showcase builder
+        # (adapted from the skill example), not a fixed skill asset.
+        run: python3 build_site.py
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy-pages:
+    needs: reproduce
+    runs-on: ubuntu-latest
+    # Publishes the showcase to GitHub Pages. Enable Pages for the repo
+    # (Settings -> Pages -> Source: GitHub Actions) for this to take effect.
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

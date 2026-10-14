@@ -1,0 +1,51 @@
+{
+  "method": {
+    "title": "Synthetic LC-MS pilot",
+    "question": "Which features differ between group A and group B in a simulated 12-sample experiment?",
+    "findings": [
+      "Feature at m/z 151.1 is higher in group A (Welch p < 0.05)",
+      "Feature at m/z 301.1 is higher in group B (Welch p < 0.05)"
+    ]
+  },
+  "inputs": [],
+  "run": "bash run.sh",
+  "results_dir": "results",
+  "steps": [
+    {
+      "id": "simulate-raw-signal-1",
+      "title": "Simulate raw signal",
+      "script": "scripts/simulate.py",
+      "produces": [
+        "data/raw_signal.csv"
+      ]
+    },
+    {
+      "id": "peak-detection-1",
+      "title": "Peak detection",
+      "script": "scripts/detect_peaks.py",
+      "produces": [
+        "results/peaks.csv"
+      ]
+    },
+    {
+      "id": "group-comparison-welch-t-test-1",
+      "title": "Group comparison, Welch t-test",
+      "script": "scripts/stats.py",
+      "produces": [
+        "results/stats.json",
+        "results/volcano.svg"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "path": "stats.json",
+      "compare": "numeric",
+      "tolerance": 1e-09
+    },
+    {
+      "path": "volcano.svg",
+      "compare": "exists"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "format": "analysis-graph/0.1",
+  "project": {
+    "name": "Synthetic LC-MS pilot",
+    "description": "Which features differ between group A and group B in a simulated 12-sample experiment?"
+  },
+  "watch": [
+    "."
+  ],
+  "exclude": [
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".ipynb_checkpoints",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".DS_Store",
+    "site",
+    ".cache"
+  ],
+  "observe": {
+    "enabled": true,
+    "nudge": true
+  }
+}
