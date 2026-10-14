@@ -7,3 +7,7 @@ examples/*/site/
 
 # Local machine-specific Claude Code settings
 .claude/settings.local.json
+
+# Recorder state (per-session scratch)
+examples/*/analysis/.state/
+analysis/.state/
