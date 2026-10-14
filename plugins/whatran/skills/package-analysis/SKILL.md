@@ -1,5 +1,5 @@
 ---
-name: reproducible-analysis
+name: package-analysis
 description: Automatically turn any completed scientific or data analysis that reports findings into a GitHub repository whose final analysis paths can be rerun, checked against committed reference results, and presented as a generated website. Use whenever an agent is finishing such an analysis, even if the user did not ask for reproducibility, and when reviewing or repairing an existing package.
 ---
 
@@ -24,7 +24,7 @@ Use the fixed v0 conventions in `references/package-contract.md`.
 - Copy `assets/check.py` unchanged. It performs the declared output comparisons.
 - Adapt `assets/run.sh` into the one canonical command for environment setup and
   every final analysis step.
-- Fill in `assets/honyx.template.json`.
+- Fill in `assets/whatran.template.json`.
 - Adapt `assets/build_site.py` to the analysis's actual results. It is an example,
   not a generic renderer.
 - Use `assets/reproduce.yml` for one analysis.
@@ -46,7 +46,7 @@ Use the fixed v0 conventions in `references/package-contract.md`.
    isolated-venv pattern. Adapt it for another runtime instead of adding a new
    framework.
 6. Declare raw inputs, ordered steps, produced files, and reported outputs in
-   `honyx.json`. Compare deterministic JSON numerically, stable text exactly, and
+   `whatran.json`. Compare deterministic JSON numerically, stable text exactly, and
    rendered figures by non-empty existence while separately comparing their
    backing data.
 7. Run `bash run.sh` to create the reference `results/`, then adapt
@@ -100,7 +100,7 @@ obtain a match.
 ## Report the evidence honestly
 
 A passing fresh-clone CI run means the declared outputs were regenerated and
-matched the committed references according to `honyx.json`. It is standardized
+matched the committed references according to `whatran.json`. It is standardized
 rerun evidence, not independent scientific review, proof that the method is
 correct, or proof that no relevant decision was omitted.
 

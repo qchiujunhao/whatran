@@ -65,7 +65,7 @@ logistic      random forest
         tables + SVG figures
 ```
 
-`honyx.json` records the same topological order. Every branch metric, ROC dataset,
+`whatran.json` records the same topological order. Every branch metric, ROC dataset,
 driver dataset, comparison, and figure is declared as an output.
 
 ## Run

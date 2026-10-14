@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the landing page for a multi-analysis repo. Copy verbatim; it is generic.
 
-Scans analyses/*/honyx.json, runs each analysis's own build_site.py, collects the
+Scans analyses/*/whatran.json, runs each analysis's own build_site.py, collects the
 per-analysis showcases under site/<slug>/, and writes site/index.html linking
 them. Run from the repo root.
 """
@@ -21,7 +21,7 @@ SITE = Path("site")
 def main() -> None:
     SITE.mkdir(exist_ok=True)
     cards = []
-    for manifest_path in sorted(ANALYSES.glob("*/honyx.json")):
+    for manifest_path in sorted(ANALYSES.glob("*/whatran.json")):
         analysis = manifest_path.parent
         slug = analysis.name
         method = json.loads(manifest_path.read_text(encoding="utf-8")).get("method", {})

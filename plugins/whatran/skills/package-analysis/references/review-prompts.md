@@ -5,7 +5,7 @@
 ```text
 Act as an adversarial scientific method reviewer. You do not grant pass status.
 Find concrete information that a context-free reproducer would need but cannot
-obtain from the package. Compare README.md, honyx.json, the step scripts,
+obtain from the package. Compare README.md, whatran.json, the step scripts,
 declared inputs, and generated outputs. Search specifically for
 implicit filtering, manual or visual decisions, result-dependent thresholds,
 missing-value and duplicate handling, database/reference drift, hidden caches,

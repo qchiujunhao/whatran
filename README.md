@@ -1,9 +1,9 @@
-# Honyx
+# Whatran
 
-[![test](https://github.com/qchiujunhao/honyx/actions/workflows/test.yml/badge.svg)](https://github.com/qchiujunhao/honyx/actions/workflows/test.yml)
-[![showcase](https://img.shields.io/badge/showcase-GitHub%20Pages-0969da)](https://qchiujunhao.github.io/honyx/)
+[![test](https://github.com/qchiujunhao/whatran/actions/workflows/test.yml/badge.svg)](https://github.com/qchiujunhao/whatran/actions/workflows/test.yml)
+[![showcase](https://img.shields.io/badge/showcase-GitHub%20Pages-0969da)](https://qchiujunhao.github.io/whatran/)
 
-Honyx is one Skill for Codex and Claude Code. It turns a completed scientific
+Whatran is one Skill for Codex and Claude Code. It turns a completed scientific
 analysis into a normal GitHub repository that:
 
 - reruns the final reported analysis from declared inputs;
@@ -13,40 +13,40 @@ analysis into a normal GitHub repository that:
 - can be understood and rerun by another person or coding agent.
 
 It captures final analysis paths, not chat history, debugging attempts, or
-discarded branches. Honyx is not a new agent platform, workflow engine, registry,
+discarded branches. Whatran is not a new agent platform, workflow engine, registry,
 or hosted execution service.
 
-See the generated [live showcase](https://qchiujunhao.github.io/honyx/).
+See the generated [live showcase](https://qchiujunhao.github.io/whatran/).
 
 ## Install
 
 Codex:
 
 ```bash
-codex plugin marketplace add qchiujunhao/honyx --ref main
-codex plugin add honyx@honyx
+codex plugin marketplace add qchiujunhao/whatran --ref main
+codex plugin add whatran@whatran
 ```
 
 Claude Code:
 
 ```bash
-claude plugin marketplace add qchiujunhao/honyx
-claude plugin install honyx@honyx
+claude plugin marketplace add qchiujunhao/whatran
+claude plugin install whatran@whatran
 ```
 
 After installation, the Skill applies automatically when the coding agent
 finishes a scientific or data analysis. The Claude Code plugin loads this
 completion rule at session start. You can also invoke
-`$reproducible-analysis` directly in Codex.
+`$package-analysis` directly in Codex.
 
 For local development, clone this repository and replace
-`qchiujunhao/honyx --ref main` with `.` in the Codex marketplace command, or
-replace `qchiujunhao/honyx` with `.` in the Claude Code command.
+`qchiujunhao/whatran --ref main` with `.` in the Codex marketplace command, or
+replace `qchiujunhao/whatran` with `.` in the Claude Code command.
 
 ## What the Skill produces
 
 ```text
-honyx.json                    declared inputs, steps, and outputs
+whatran.json                    declared inputs, steps, and outputs
 run.sh                        one canonical rerun command
 requirements.txt             resolved environment lock for Python analyses
 data/                         raw inputs or checked download instructions
@@ -80,7 +80,7 @@ python3 build_site.py
 ```
 
 A pass means the declared outputs regenerated and matched according to
-`honyx.json`. It does not establish scientific correctness or prove that no
+`whatran.json`. It does not establish scientific correctness or prove that no
 relevant method decision was omitted.
 
 ## Examples
@@ -88,11 +88,11 @@ relevant method decision was omitted.
 - `examples/pipeline-demo/` — the smallest complete, standard-library pipeline.
 - `examples/cancer-classification/` — a real dependency-heavy analysis with two
   defensible model paths, explicit comparison, numeric checks, and a generated
-  [live result page](https://qchiujunhao.github.io/honyx/example/).
+  [live result page](https://qchiujunhao.github.io/whatran/example/).
 - `examples/multi-analysis-demo/` — two independent questions checked and shown
   in one repository website.
 
-The installable product is entirely under `plugins/honyx/`. Examples demonstrate
+The installable product is entirely under `plugins/whatran/`. Examples demonstrate
 what the Skill produces; they are not required after installation.
 
 ## License

@@ -3,7 +3,7 @@
 Use these fixed v0 paths:
 
 ```text
-honyx.json
+whatran.json
 run.sh
 requirements.txt
 README.md
@@ -18,7 +18,7 @@ results/
 For a non-Python analysis, replace `requirements.txt` with the runtime's lock but
 keep `run.sh` as the canonical entrypoint.
 
-`honyx.json` is intentionally small:
+`whatran.json` is intentionally small:
 
 ```json
 {

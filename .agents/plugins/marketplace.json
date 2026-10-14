@@ -1,14 +1,14 @@
 {
-  "name": "honyx",
+  "name": "whatran",
   "interface": {
-    "displayName": "Honyx"
+    "displayName": "Whatran"
   },
   "plugins": [
     {
-      "name": "honyx",
+      "name": "whatran",
       "source": {
         "source": "local",
-        "path": "./plugins/honyx"
+        "path": "./plugins/whatran"
       },
       "policy": {
         "installation": "AVAILABLE",

@@ -19,7 +19,7 @@ independent scientific judgment.
 A passing run supports only this statement:
 
 > The declared outputs regenerated from the declared inputs and matched the
-> committed references under the comparisons in `honyx.json`.
+> committed references under the comparisons in `whatran.json`.
 
 It does not establish scientific correctness, completeness of method capture, or
 validity on new data.

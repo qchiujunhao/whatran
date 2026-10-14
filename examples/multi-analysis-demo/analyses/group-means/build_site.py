@@ -15,7 +15,7 @@ OUT_DIR = Path("site")
 
 
 def main() -> None:
-    manifest = json.loads(Path("honyx.json").read_text(encoding="utf-8"))
+    manifest = json.loads(Path("whatran.json").read_text(encoding="utf-8"))
     method = manifest.get("method", {})
     results_dir = Path(manifest.get("results_dir", "results"))
     summary = json.loads((results_dir / "summary.json").read_text(encoding="utf-8"))

@@ -1,0 +1,15 @@
+{
+  "description": "Load the Whatran completion contract",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'For tasks that report scientific or data-analysis findings, completion includes invoking /whatran:package-analysis and producing a rerunnable, checked package. Other tasks are unaffected.'"
+          }
+        ]
+      }
+    ]
+  }
+}

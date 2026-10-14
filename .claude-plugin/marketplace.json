@@ -1,15 +1,15 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "honyx",
+  "name": "whatran",
   "description": "A single skill that turns completed scientific analyses into reproducible GitHub repositories.",
   "owner": {
-    "name": "Honyx contributors"
+    "name": "Whatran contributors"
   },
   "plugins": [
     {
-      "name": "honyx",
+      "name": "whatran",
       "description": "Package a final analysis pipeline for clean reruns, result comparison, and GitHub Pages.",
-      "source": "./plugins/honyx",
+      "source": "./plugins/whatran",
       "category": "productivity"
     }
   ]

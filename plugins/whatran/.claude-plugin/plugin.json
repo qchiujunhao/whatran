@@ -1,8 +1,8 @@
 {
-  "name": "honyx",
+  "name": "whatran",
   "version": "0.1.4",
   "description": "Turn a completed scientific analysis into a reproducible, shareable, self-showcasing GitHub repository.",
   "author": {
-    "name": "Honyx contributors"
+    "name": "Whatran contributors"
   }
 }

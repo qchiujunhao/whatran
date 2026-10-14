@@ -1,0 +1,21 @@
+{
+  "name": "whatran",
+  "version": "0.1.4",
+  "description": "Turn a finished analysis into a reproducible, shareable, self-showcasing GitHub repo.",
+  "author": {
+    "name": "Whatran contributors"
+  },
+  "homepage": "https://qchiujunhao.github.io/whatran/",
+  "repository": "https://github.com/qchiujunhao/whatran",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Whatran",
+    "shortDescription": "Make an analysis reproducible, shareable, and self-showcasing.",
+    "longDescription": "Whatran captures a finished analysis as a multi-step pipeline whose declared outputs regenerate from raw inputs. A fresh CI clone verifies reproduction, and a generated site showcases the steps, scripts, and result visualizations — all shared as a normal GitHub repo.",
+    "developerName": "Whatran contributors",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Make this analysis reproducible and shareable as a GitHub repo."
+  }
+}

@@ -8,7 +8,7 @@ from pathlib import Path
 import matplotlib
 
 matplotlib.use("Agg")
-matplotlib.rcParams["svg.hashsalt"] = "honyx"
+matplotlib.rcParams["svg.hashsalt"] = "whatran"
 import matplotlib.pyplot as plt  # noqa: E402
 
 

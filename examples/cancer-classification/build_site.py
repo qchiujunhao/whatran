@@ -24,7 +24,7 @@ def score(value: object) -> str:
 
 
 def main() -> None:
-    manifest = json.loads(Path("honyx.json").read_text(encoding="utf-8"))
+    manifest = json.loads(Path("whatran.json").read_text(encoding="utf-8"))
     method = manifest["method"]
     results = Path(manifest["results_dir"])
     comparison = json.loads((results / "comparison.json").read_text(encoding="utf-8"))
@@ -95,7 +95,7 @@ def main() -> None:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="A generated, fresh-clone-checked two-path analysis.">
   <meta name="theme-color" content="#102a2b">
-  <title>{title} · Honyx example</title>
+  <title>{title} · Whatran example</title>
   <style>
     :root {{
       --paper: #f6f3ec;
@@ -282,12 +282,12 @@ def main() -> None:
 <body>
   <header class="wrap">
     <nav aria-label="Analysis navigation">
-      <a class="brand" href="../"><span class="brand-mark">H·</span>Honyx</a>
+      <a class="brand" href="../"><span class="brand-mark">H·</span>Whatran</a>
       <div class="nav-links">
         <a href="#results">Results</a>
         <a href="#method">Method</a>
         <a href="#reproduce">Reproduce</a>
-        <a href="https://github.com/qchiujunhao/honyx/tree/main/examples/cancer-classification">Source ↗</a>
+        <a href="https://github.com/qchiujunhao/whatran/tree/main/examples/cancer-classification">Source ↗</a>
       </div>
     </nav>
     <p class="eyebrow">Generated example · fresh-clone checked</p>
@@ -359,8 +359,8 @@ def main() -> None:
         <div class="reproduce-grid">
           <article class="reproduce-card">
             <h3>Run locally</h3>
-            <pre><code>git clone https://github.com/qchiujunhao/honyx
-cd honyx/examples/cancer-classification
+            <pre><code>git clone https://github.com/qchiujunhao/whatran
+cd whatran/examples/cancer-classification
 bash run.sh</code></pre>
           </article>
           <article class="reproduce-card">
@@ -368,7 +368,7 @@ bash run.sh</code></pre>
             <ul>
               <li>A fresh clone regenerated the declared outputs from the declared input.</li>
               <li>Declared outputs matched under their configured comparison rules, and declared figures were recreated.</li>
-              <li><a href="https://github.com/qchiujunhao/honyx/actions/workflows/test.yml">Open the GitHub Actions evidence ↗</a></li>
+              <li><a href="https://github.com/qchiujunhao/whatran/actions/workflows/test.yml">Open the GitHub Actions evidence ↗</a></li>
               <li>It does not establish clinical validity or scientific correctness.</li>
             </ul>
           </article>
@@ -380,7 +380,7 @@ bash run.sh</code></pre>
   <footer>
     <div class="wrap footer-row">
       <span>Generated from the rerun outputs by the analysis package.</span>
-      <span><a href="../">About Honyx</a> · <a href="https://github.com/qchiujunhao/honyx">GitHub</a></span>
+      <span><a href="../">About Whatran</a> · <a href="https://github.com/qchiujunhao/whatran">GitHub</a></span>
     </div>
   </footer>
 </body>

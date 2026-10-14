@@ -14,7 +14,7 @@ multi-analysis-demo/
 └── reproduce.yml        # -> .github/workflows/reproduce.yml
 ```
 
-Each `analyses/<slug>/` is a complete package (`honyx.json`, `steps/`, `run.sh`,
+Each `analyses/<slug>/` is a complete package (`whatran.json`, `steps/`, `run.sh`,
 `results/`, `check.py`, `build_site.py`, and `README.md`) — exactly the
 single-analysis shape, composed.
 

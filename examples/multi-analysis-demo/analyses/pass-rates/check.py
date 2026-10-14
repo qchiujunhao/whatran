@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare regenerated outputs against the reference outputs.
 
-Output declarations are read from honyx.json. The reference directory holds the
+Output declarations are read from whatran.json. The reference directory holds the
 committed outputs that were moved aside before the pipeline re-ran, so a passing
 comparison means the outputs were regenerated from raw inputs, not reused.
 
@@ -38,7 +38,7 @@ def numbers_match(a: object, b: object, tol: float) -> bool:
 def main() -> int:
     generated_dir = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("results")
     reference_dir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("reference-outputs")
-    manifest = json.loads(Path("honyx.json").read_text(encoding="utf-8"))
+    manifest = json.loads(Path("whatran.json").read_text(encoding="utf-8"))
 
     failures: list[str] = []
     for output in manifest["outputs"]:

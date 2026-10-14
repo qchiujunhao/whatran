@@ -34,8 +34,8 @@ jobs:
         working-directory: examples/multi-analysis-demo
         run: |
           set -euo pipefail
-          for manifest in analyses/*/honyx.json; do
-            analysis="${manifest%/honyx.json}"
+          for manifest in analyses/*/whatran.json; do
+            analysis="${manifest%/whatran.json}"
             slug="${analysis##*/}"
             (
               cd "$analysis"
@@ -58,17 +58,17 @@ jobs:
 
       - name: Assemble product site
         run: |
-          mkdir -p "$RUNNER_TEMP/honyx-pages/example"
-          cp pages/index.html "$RUNNER_TEMP/honyx-pages/index.html"
-          cp -R examples/cancer-classification/site/. "$RUNNER_TEMP/honyx-pages/example/"
-          test -s "$RUNNER_TEMP/honyx-pages/index.html"
-          test -s "$RUNNER_TEMP/honyx-pages/example/index.html"
-          test -s "$RUNNER_TEMP/honyx-pages/example/roc_comparison.svg"
-          test -s "$RUNNER_TEMP/honyx-pages/example/model_drivers.svg"
-          grep -Fq 'href="./example/"' "$RUNNER_TEMP/honyx-pages/index.html"
-          grep -Fq '<details class=' "$RUNNER_TEMP/honyx-pages/example/index.html"
+          mkdir -p "$RUNNER_TEMP/whatran-pages/example"
+          cp pages/index.html "$RUNNER_TEMP/whatran-pages/index.html"
+          cp -R examples/cancer-classification/site/. "$RUNNER_TEMP/whatran-pages/example/"
+          test -s "$RUNNER_TEMP/whatran-pages/index.html"
+          test -s "$RUNNER_TEMP/whatran-pages/example/index.html"
+          test -s "$RUNNER_TEMP/whatran-pages/example/roc_comparison.svg"
+          test -s "$RUNNER_TEMP/whatran-pages/example/model_drivers.svg"
+          grep -Fq 'href="./example/"' "$RUNNER_TEMP/whatran-pages/index.html"
+          grep -Fq '<details class=' "$RUNNER_TEMP/whatran-pages/example/index.html"
           for auc in $(python3 -c 'import json; d=json.load(open("examples/cancer-classification/results/comparison.json")); print(*(format(d["paths"][k]["roc_auc"], ".3f") for k in ("logistic_regression", "random_forest")))'); do
-            grep -Fq "$auc" "$RUNNER_TEMP/honyx-pages/example/index.html"
+            grep -Fq "$auc" "$RUNNER_TEMP/whatran-pages/example/index.html"
           done
 
       - name: Configure GitHub Pages
@@ -79,7 +79,7 @@ jobs:
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4
         with:
-          path: ${{ runner.temp }}/honyx-pages
+          path: ${{ runner.temp }}/whatran-pages
 
   deploy-pages:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'

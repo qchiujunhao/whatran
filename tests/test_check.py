@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CHECK = ROOT / "plugins/honyx/skills/reproducible-analysis/assets/check.py"
+CHECK = ROOT / "plugins/whatran/skills/package-analysis/assets/check.py"
 COPIES = [
     ROOT / "examples/pipeline-demo/check.py",
     ROOT / "examples/cancer-classification/check.py",
@@ -40,7 +40,7 @@ class CheckTests(unittest.TestCase):
         )
 
     def write_manifest(self, outputs: list[dict[str, object]]) -> None:
-        (self.root / "honyx.json").write_text(
+        (self.root / "whatran.json").write_text(
             json.dumps({"outputs": outputs}), encoding="utf-8"
         )
 

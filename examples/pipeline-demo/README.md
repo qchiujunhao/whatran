@@ -1,6 +1,6 @@
 # Pipeline demo — a reproducible, shareable, self-showcasing analysis
 
-This is the reference example for the `reproducible-analysis` skill. It shows the
+This is the reference example for the `package-analysis` skill. It shows the
 whole shape in miniature: a multi-step analysis pipeline whose declared outputs
 regenerate from the raw input, checked by CI on a fresh clone, with a generated
 showcase website.
@@ -30,7 +30,7 @@ beyond this demonstration input.
 
 ```text
 pipeline-demo/
-├── honyx.json        # lightweight manifest: inputs, steps, outputs + comparisons
+├── whatran.json        # lightweight manifest: inputs, steps, outputs + comparisons
 ├── run.sh            # orchestrator (runs the steps in order)
 ├── requirements.txt  # environment lock (stdlib only here)
 ├── data/

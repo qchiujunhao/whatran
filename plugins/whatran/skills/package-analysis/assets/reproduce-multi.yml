@@ -28,8 +28,8 @@ jobs:
       - name: Reproduce every analysis
         run: |
           set -euo pipefail
-          for manifest in analyses/*/honyx.json; do
-            analysis="${manifest%/honyx.json}"
+          for manifest in analyses/*/whatran.json; do
+            analysis="${manifest%/whatran.json}"
             slug="${analysis##*/}"
             (
               cd "$analysis"
