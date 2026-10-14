@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analysis Graph"
+  short_description: "Record an analysis as a checkable, result-centric graph while doing it"
+  default_prompt: "Use $record-analysis while analysing: init once, record each meaningful step by what it did, claim the findings, then done."

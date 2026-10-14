@@ -1,4 +1,4 @@
 interface:
-  display_name: "Reproducible Analysis"
+  display_name: "Package Analysis"
   short_description: "Package final analyses as reproducible GitHub repositories"
   default_prompt: "Use $package-analysis to package this completed analysis as a reproducible GitHub repository."

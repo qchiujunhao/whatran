@@ -1,111 +1,62 @@
 ---
 name: package-analysis
-description: Automatically turn any completed scientific or data analysis that reports findings into a GitHub repository whose final analysis paths can be rerun, checked against committed reference results, and presented as a generated website. Use whenever an agent is finishing such an analysis, even if the user did not ask for reproducibility, and when reviewing or repairing an existing package.
+description: Turn a completed scientific or data analysis that reports findings into a repository that reruns the result path from declared inputs, checks the regenerated outputs against committed references on a fresh clone, and shows the result on a generated page. Use whenever an agent is finishing such an analysis, even if the user did not ask for reproducibility, and when reviewing or repairing an existing package. Stage two of Whatran; record-analysis is stage one.
 ---
 
-# Reproducible Analysis
+# Package the result
 
-Package the **final reported analysis**, not the agent's exploration. Leave a
-normal repository that a person or another coding agent can understand, rerun,
-check, and show through GitHub Pages.
+Package the **final reported path**, not the exploration. The result is a normal
+repository that a person or another agent can rerun, check, and read.
 
-Treat this package as part of completing the analysis, not as an optional
-follow-up. The user does not need to request it explicitly.
+Treat this as part of completing the analysis; the user does not need to ask.
 
-**Minimality gate:** preserve the user's analytical scope. Do not add
-unrequested tests, claims, files, outputs, or dependencies while packaging.
-Prefer existing code and the standard library; delete anything whose absence
-would not weaken the answer, rerun, comparison, or result page.
-
-Use the fixed v0 conventions in `references/package-contract.md`.
-
-## Use the bundled pieces
-
-- Copy `assets/check.py` unchanged. It performs the declared output comparisons.
-- Adapt `assets/run.sh` into the one canonical command for environment setup and
-  every final analysis step.
-- Fill in `assets/whatran.template.json`.
-- Adapt `assets/build_site.py` to the analysis's actual results. It is an example,
-  not a generic renderer.
-- Use `assets/reproduce.yml` for one analysis.
-- Use `assets/reproduce-multi.yml` and `assets/build_index.py` for several
-  independent analyses in one repository.
-
-## Finalize
-
-1. State the scientific question and the findings that will be reported.
-2. Identify the true raw inputs. Do not treat outputs, caches, notebook state, or
-   the exploratory workspace as inputs.
-3. Retain only result-affecting paths that belong in the final report. Convert
-   manual or interactive actions into scripts or disclose them.
-4. Put final operations into ordered scripts under `steps/`. Let multiple scripts
-   read a shared earlier result when the final method branches.
-5. Make `run.sh` recreate `results/`, reconstruct the declared environment, and
-   run every step non-interactively from the package root. For Python, freeze the
-   full resolved environment in `requirements.txt`; the bundled `run.sh` shows the
-   isolated-venv pattern. Adapt it for another runtime instead of adding a new
-   framework.
-6. Declare raw inputs, ordered steps, produced files, and reported outputs in
-   `whatran.json`. Compare deterministic JSON numerically, stable text exactly, and
-   rendered figures by non-empty existence while separately comparing their
-   backing data.
-7. Run `bash run.sh` to create the reference `results/`, then adapt
-   `build_site.py` into a result-first page: answer the question in the first
-   viewport, then show key tables or figures, final paths, and scripts. Collapse
-   long source listings by default. Generate the site from results; never
-   maintain result values separately in HTML.
-8. Write a self-contained `README.md` with the question, method choices,
-   assumptions, limitations, result meaning, rerun command, and precise CI claim.
-9. Commit `results/`, `check.py`, the environment lock, and the workflow at
-   `.github/workflows/reproduce.yml`. Ignore `.venv/` and `site/`.
-
-## Choose one repository shape
-
-- **One question, one final path:** create one package at the repository root.
-- **Several independent questions:** create one self-contained package per
-  question under `analyses/<slug>/`. The multi-analysis workflow discovers and
-  checks every manifest before `build_index.py` publishes the combined site.
-- **One question, several defensible final paths:** keep one package. Represent
-  the branches as steps after shared preparation, add a comparison step, declare
-  every branch result plus the comparison as outputs, and show them side by side.
-
-Do not package every attempted branch. Keep only paths the final report presents.
-
-## Treat the website as a deliverable
-
-- Give every figure a title, takeaway, and interpretation boundary.
-- Link the rerun command and CI evidence, and state what a pass does not prove
-  beside the result rather than after the source listings.
-- Keep the page usable without JavaScript and inspect it at desktop and mobile
-  widths before publishing. Repair overflow, clipped figures, unreadable code,
-  weak contrast, and unstyled document dumps.
-
-## Check it locally
-
-Move the committed reference outside the package, rerun, compare, and build the
-same site CI will publish:
+## With a recorded graph (the normal case)
 
 ```bash
-reference_root="$(mktemp -d)"
-mv results "$reference_root/results"
-bash run.sh
-python3 check.py results "$reference_root/results"
-python3 build_site.py
+python3 analysis/whatran.py package     # whatran.json, run.sh, check.py, build_site.py, .github/workflows/reproduce.yml
+python3 analysis/whatran.py check       # move results/ aside, bash run.sh, compare, mark the steps replay-verified
 ```
 
-Run the completeness audit in `references/review-prompts.md` before claiming
-done. Repair only concrete gaps; never change the scientific method merely to
-obtain a match.
+`package` derives everything from the result path of the graph: inputs, the
+completed steps in dependency order (rejected branches excluded), the result
+files with a comparison rule each. `run.sh` is the recorded commands in order.
+Before `check`:
+
+1. Read `run.sh`. Add dependency installation under "Environment" if the steps
+   need packages (for Python, freeze `requirements.txt` and use a venv as the
+   template shows). Do not change what the steps compute.
+2. Read `whatran.json`. Inputs must be raw inputs only. Outputs are compared
+   `numeric` (JSON, with tolerance), `exact` (stable text) or `exists`
+   (rendered figures; compare their backing data separately). Fix the guesses.
+3. If a step has no recorded command (`declared`), write it as a script and put
+   the command in `run.sh`; `check` fails loudly until you do.
+
+`check` fails when run.sh fails or outputs differ; the committed results are put
+back either way. Repair only concrete gaps. Never change the method, thresholds,
+inputs or conclusion merely to obtain a match; if a correction changes the
+method, say so and record it as a new step.
+
+Then commit `results/`, `whatran.json`, `run.sh`, `check.py`, `build_site.py`,
+the workflow and the environment lock. Ignore `.venv/` and `site/`. CI repeats
+`check` on every push and publishes `site/` (result page plus the graph).
+
+**Minimality:** do not add unrequested tests, claims, files, outputs or
+dependencies while packaging. Delete anything whose absence would not weaken
+the answer, the rerun, the comparison or the result page.
+
+## Without a recorded graph
+
+Use `assets/` directly: copy `check.py` unchanged, adapt `run.sh`, fill in
+`whatran.template.json`, adapt `build_site.py` (an example page) or use
+`build_site_from_graph.py`, add `reproduce.yml`. Several independent questions
+in one repository: one package per `analyses/<slug>/`, `reproduce-multi.yml`
+and `build_index.py`. `references/package-contract.md` is the full contract.
 
 ## Report the evidence honestly
 
-A passing fresh-clone CI run means the declared outputs were regenerated and
-matched the committed references according to `whatran.json`. It is standardized
-rerun evidence, not independent scientific review, proof that the method is
-correct, or proof that no relevant decision was omitted.
-
-If the full analysis does not fit the configured runner, use a larger or
-self-hosted runner. If only a subset is checked, label the badge and README as
-subset verification.
-
-Read `references/verification-policy.md` before making a reproduction claim.
+A passing check means the declared outputs regenerated from the declared inputs
+and matched the committed references under `whatran.json`. It is rerun
+evidence, not scientific review, not proof the method is right, not proof that
+nothing was omitted. If CI checks only a subset of the data, label it as a
+subset. `references/verification-policy.md` has the exact wording;
+`references/review-prompts.md` has an audit prompt to run before claiming done.

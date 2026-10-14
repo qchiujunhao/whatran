@@ -1,9 +1,9 @@
 {
   "name": "whatran",
-  "version": "0.1.4",
-  "description": "Turn a finished analysis into a reproducible, shareable, self-showcasing GitHub repo.",
+  "version": "0.2.0",
+  "description": "What ran? Record an agent's scientific analysis as a checkable Analysis Graph, then package the final path so it reruns and checks on a fresh clone.",
   "author": {
-    "name": "Whatran contributors"
+    "name": "Junhao Qiu"
   },
   "homepage": "https://qchiujunhao.github.io/whatran/",
   "repository": "https://github.com/qchiujunhao/whatran",
@@ -11,11 +11,11 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Whatran",
-    "shortDescription": "Make an analysis reproducible, shareable, and self-showcasing.",
-    "longDescription": "Whatran captures a finished analysis as a multi-step pipeline whose declared outputs regenerate from raw inputs. A fresh CI clone verifies reproduction, and a generated site showcases the steps, scripts, and result visualizations — all shared as a normal GitHub repo.",
-    "developerName": "Whatran contributors",
+    "shortDescription": "Record what ran, then package the final path so it reruns and checks.",
+    "longDescription": "Whatran has two skills. record-analysis keeps an append-only ledger of what the agent actually executed and compiles it into a result-centric graph of artifacts, runs and claims, with every run graded observed or declared and every file checked for integrity. package-analysis turns the final reported path into a normal GitHub repository that reruns from declared inputs, compares regenerated outputs with committed references on a fresh CI clone, and publishes a result-first page. Only a passed replay marks a run as reproducible.",
+    "developerName": "Junhao Qiu",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Make this analysis reproducible and shareable as a GitHub repo."
+    "defaultPrompt": "Use $record-analysis while analysing, then $package-analysis to package the final path as a reproducible GitHub repository."
   }
 }
