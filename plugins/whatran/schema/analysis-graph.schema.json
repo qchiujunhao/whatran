@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/qchiujunhao/analysis-graph/schema/analysis-graph.schema.json",
+  "title": "Analysis Graph (analysis-graph/0.1)",
+  "description": "A result-centric provenance graph of a scientific analysis performed by an agent or a person. Artifacts are files (PROV Entity), runs are computations that actually happened (PROV Activity), claims are conclusions that rest on them. Every run carries an evidence level; nothing is reproducible by assertion.",
+  "type": "object",
+  "required": ["format", "nodes", "edges"],
+  "properties": {
+    "format": { "const": "analysis-graph/0.1" },
+    "generator": { "type": "string" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "project": {
+      "type": "object",
+      "properties": { "name": { "type": "string" }, "description": { "type": "string" } }
+    },
+    "nodes": { "type": "array", "items": { "$ref": "#/$defs/node" } },
+    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+    "main_path": {
+      "type": "array", "items": { "type": "string" },
+      "description": "Node ids the viewer shows by default: everything the active claims (or, without claims, the result artifacts) depend on, plus side products of those runs. Off-path nodes are kept, not deleted."
+    },
+    "summary": { "type": "object" },
+    "exec_log": {
+      "type": "array", "items": { "$ref": "#/$defs/exec" },
+      "description": "Every recorded execution, linked to a run or not. This is the complete audit record; the graph is a view over it."
+    }
+  },
+  "$defs": {
+    "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "node": {
+      "type": "object",
+      "required": ["id", "type", "label"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^(art|run|claim)-[a-z0-9-]+$" },
+        "type": { "enum": ["artifact", "run", "claim"] },
+        "label": { "type": "string" },
+        "note": { "type": "string" },
+        "recorded_at": { "type": "string" },
+        "recorded_by": { "type": "string", "description": "agent or person that declared the node, e.g. claude-code, codex, chatgpt, human" },
+        "on_main_path": { "type": "boolean" },
+        "status_reason": { "type": "string" },
+        "supersedes": { "type": "string", "description": "earlier node this one replaces; both are kept" }
+      },
+      "oneOf": [
+        { "$ref": "#/$defs/artifact" },
+        { "$ref": "#/$defs/run" },
+        { "$ref": "#/$defs/claim" }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["type", "path"],
+      "properties": {
+        "type": { "const": "artifact" },
+        "path": { "type": "string", "description": "path relative to the project root (absolute only for external files)" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "size": { "type": ["integer", "null"] },
+        "exists": { "type": "boolean" },
+        "role": { "enum": ["input", "intermediate", "result"], "description": "derived at compile time from the edges" },
+        "integrity": { "enum": ["intact", "modified", "missing", "unchecked"], "description": "whether the file on disk still matches the recorded hash" },
+        "origin": { "type": "string", "description": "where an input came from: URL, accession, instrument, person" },
+        "version": { "type": "integer" },
+        "generated_by": { "type": ["string", "null"] },
+        "used_by": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "run": {
+      "type": "object",
+      "required": ["type", "status", "evidence"],
+      "properties": {
+        "type": { "const": "run" },
+        "command": { "type": ["string", "null"] },
+        "code": { "type": "array", "items": { "type": "object", "required": ["path"], "properties": { "path": { "type": "string" }, "sha256": { "$ref": "#/$defs/sha256" } } } },
+        "params": { "type": "object", "description": "result-affecting parameters only" },
+        "inputs": { "type": "array", "items": { "type": "string" } },
+        "outputs": { "type": "array", "items": { "type": "string" } },
+        "status": { "enum": ["completed", "failed", "rejected", "superseded"] },
+        "evidence": {
+          "type": "object",
+          "required": ["level"],
+          "properties": {
+            "level": { "enum": ["observed", "declared"], "description": "observed: an execution recorder captured the command; declared: the agent asserted it" },
+            "exec_ids": { "type": "array", "items": { "type": "string" } },
+            "source": { "type": "string" },
+            "exit_code": { "type": ["integer", "null"] },
+            "started": { "type": ["string", "null"] },
+            "ended": { "type": ["string", "null"] },
+            "duration_ms": { "type": ["integer", "null"] },
+            "cwd": { "type": "string" },
+            "stdout_head": { "type": ["string", "null"] },
+            "stderr_head": { "type": ["string", "null"] },
+            "outputs_observed": { "type": "array", "items": { "type": "string" }, "description": "declared outputs that were seen changing during the execution and whose hash still matches" }
+          }
+        },
+        "environment": { "type": "object" },
+        "git": { "type": ["object", "null"], "properties": { "commit": { "type": "string" }, "dirty": { "type": "boolean" } } },
+        "verified_by_replay": { "type": "boolean", "description": "true only after a rerun in a clean environment reproduced the outputs" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "claim" },
+        "supported_by": { "type": "array", "items": { "type": "string" }, "description": "run, artifact or claim ids" },
+        "status": { "enum": ["tentative", "supported", "rejected"] }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "to", "kind"],
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "kind": { "enum": ["used", "generated", "supports", "supersedes"], "description": "used: artifact -> run (PROV used); generated: run -> artifact (PROV wasGeneratedBy, reversed); supports: run|artifact|claim -> claim (PROV wasDerivedFrom, reversed); supersedes: new -> old" }
+      }
+    },
+    "exec": {
+      "type": "object",
+      "required": ["id", "command"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^x-[0-9]{4,}$" },
+        "ts": { "type": "string" },
+        "source": { "type": "string", "description": "claude-code-hook, codex-hook, ag-run, ..." },
+        "command": { "type": "string" },
+        "cwd": { "type": "string" },
+        "exit_code": { "type": ["integer", "null"] },
+        "started": { "type": ["string", "null"] },
+        "ended": { "type": ["string", "null"] },
+        "duration_ms": { "type": ["integer", "null"] },
+        "stdout_head": { "type": "string" },
+        "stderr_head": { "type": "string" },
+        "files_changed": {
+          "type": ["array", "null"],
+          "items": { "type": "object", "required": ["path"], "properties": { "path": { "type": "string" }, "size": { "type": "integer" }, "mtime": { "type": "string" }, "sha256": { "$ref": "#/$defs/sha256" } } },
+          "description": "files under the watched directories whose mtime changed during the execution; null when the recorder could not observe the window"
+        },
+        "files_changed_truncated": { "type": "boolean" },
+        "interrupted": { "type": "boolean" },
+        "linked_run": { "type": ["string", "null"] },
+        "session": { "type": "string" },
+        "tool_use_id": { "type": "string" }
+      }
+    }
+  }
+}
