@@ -19,8 +19,27 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Test the fixed comparator
+      - name: Unit tests (comparator, recorder, hooks)
         run: python3 -m unittest discover -v
+
+      - name: Manifests are valid JSON
+        run: |
+          for f in .claude-plugin/marketplace.json .agents/plugins/marketplace.json \
+                   plugins/whatran/.claude-plugin/plugin.json plugins/whatran/.codex-plugin/plugin.json \
+                   plugins/whatran/hooks/hooks.json plugins/whatran/schema/analysis-graph.schema.json; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f"
+          done
+
+      - name: Record, package and check the recorded example from scratch
+        working-directory: examples/recorded-demo
+        run: |
+          bash make_demo.sh
+          python3 analysis/whatran.py verify
+          test -s analysis/graph.json
+          test -s analysis/index.html
+          test -s whatran.json
+          test -s run.sh
+          test -s site/index.html
 
       - name: Reproduce the standard-library example
         working-directory: examples/pipeline-demo
@@ -58,15 +77,19 @@ jobs:
 
       - name: Assemble product site
         run: |
-          mkdir -p "$RUNNER_TEMP/whatran-pages/example"
+          mkdir -p "$RUNNER_TEMP/whatran-pages/example" "$RUNNER_TEMP/whatran-pages/graph"
           cp pages/index.html "$RUNNER_TEMP/whatran-pages/index.html"
           cp -R examples/cancer-classification/site/. "$RUNNER_TEMP/whatran-pages/example/"
+          cp examples/recorded-demo/analysis/index.html examples/recorded-demo/analysis/graph.json "$RUNNER_TEMP/whatran-pages/graph/"
           test -s "$RUNNER_TEMP/whatran-pages/index.html"
           test -s "$RUNNER_TEMP/whatran-pages/example/index.html"
           test -s "$RUNNER_TEMP/whatran-pages/example/roc_comparison.svg"
           test -s "$RUNNER_TEMP/whatran-pages/example/model_drivers.svg"
+          test -s "$RUNNER_TEMP/whatran-pages/graph/graph.json"
           grep -Fq 'href="./example/"' "$RUNNER_TEMP/whatran-pages/index.html"
+          grep -Fq 'href="./graph/"' "$RUNNER_TEMP/whatran-pages/index.html"
           grep -Fq '<details class=' "$RUNNER_TEMP/whatran-pages/example/index.html"
+          python3 -c 'import json; g=json.load(open("examples/recorded-demo/analysis/graph.json")); s=g["summary"]; assert s["runs"]["observed"]==s["runs"]["total"]==4 and s["claims"]["total"]==2 and s["runs"]["rejected"]==1 and s["runs"]["replay_verified"]==3, s'
           for auc in $(python3 -c 'import json; d=json.load(open("examples/cancer-classification/results/comparison.json")); print(*(format(d["paths"][k]["roc_auc"], ".3f") for k in ("logistic_regression", "random_forest")))'); do
             grep -Fq "$auc" "$RUNNER_TEMP/whatran-pages/example/index.html"
           done
