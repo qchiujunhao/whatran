@@ -1,6 +1,6 @@
 {
   "name": "whatran",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "What ran? Record an agent's scientific analysis as a checkable Analysis Graph, then package the final path so it reruns and checks on a fresh clone.",
   "author": {
     "name": "Junhao Qiu"

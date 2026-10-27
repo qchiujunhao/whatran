@@ -35,6 +35,12 @@ claude plugin marketplace add qchiujunhao/whatran
 claude plugin install whatran@whatran
 ```
 
+Any shell, script or notebook, with or without an agent:
+
+```bash
+pip install whatran
+```
+
 That is the whole setup. Nothing is recorded in projects the agent has not
 initialised, and the agent initialises a project only when it starts an analysis
 there.
@@ -53,25 +59,72 @@ python3 analysis/whatran.py check    # rerun from clean and compare, like CI doe
 The skill tells the agent to run these as it works; you can run them too.
 
 ```bash
-python3 <plugin>/bin/whatran.py init          # once per project; copies whatran.py into analysis/
-python3 analysis/whatran.py record "Peak detection"      # after a meaningful step
-python3 analysis/whatran.py claim "X is higher in group B (p < 0.05)"
-python3 analysis/whatran.py reject run-peak-detection-1 --reason "called noise as peaks"
-python3 analysis/whatran.py done              # compile, check files, draft the package
-python3 analysis/whatran.py package           # whatran.json, run.sh, check.py, build_site.py, CI workflow
-python3 analysis/whatran.py check             # rerun from clean, compare, mark replay-verified
+whatran init                                  # once per project; copies whatran.py into analysis/
+whatran record "Detect peaks"                 # after a meaningful step
+whatran claim "Feature 301.1 is higher in group B (p < 0.05)"
+whatran reject run-detect-peaks-1 --reason "Threshold 1.1 calls noise as peaks"
+whatran done                                  # compile, check files, draft the package
+whatran package                               # whatran.json, run.sh, check.py, build_site.py, CI workflow
+whatran check                                 # rerun from clean, compare, mark replay-verified
 ```
 
+`whatran` is the command after `pip install whatran`; without pip it is
+`python3 analysis/whatran.py`, the copy that `init` leaves in the project.
+
 `record` needs only the label. The command that ran was captured already (by
-the Claude Code hooks, or by `whatran.py run -- CMD` in any other agent), so
+the Claude Code hooks, or by `whatran run -- CMD` in any other agent), so
 inputs, outputs, code and parameters are read from it; flags such as `--in`,
 `--out`, `--param k=v` override when the guess is wrong. `claim` attaches to
 the last completed run unless told otherwise. `run.sh` is the recorded commands
 in dependency order; review it, add dependency installation if the steps need
 packages, and `check` does the rest.
 
+### In code: Python and R
+
+Scripts and notebooks can record their own steps. Files that change inside a
+step become its outputs; the script is recorded as the code.
+
+```python
+import whatran as w
+
+with w.step("Detect peaks", params={"threshold": 5}, inputs=["data/raw.csv"]) as s:
+    peaks = detect(raw, threshold=5)
+    peaks.to_csv("results/peaks.csv")
+
+@w.step("Fit model", params=["method"])          # captures the named arguments
+def fit(table, method="welch"): ...
+
+w.claim("Feature 301.1 is higher in group B (p < 0.05)", supports=[s])
+w.reject(s, "Threshold 1.1 calls noise as peaks")
+w.edit(s, params={"peakwidth": [5, 30]})
+w.remove(s)                                      # retracts from the graph; the ledger keeps it
+```
+
+```r
+source("r/whatran/R/whatran.R")                  # or install the package under r/whatran
+id <- whatran_step("Detect peaks", {
+  peaks <- detect(raw, threshold = 5)
+  write.csv(peaks, "results/peaks.csv")
+}, params = list(threshold = 5), inputs = "data/raw.csv")
+whatran_claim("Feature 301.1 is higher in group B (p < 0.05)", supports = id)
+```
+
+Both go through the same command (`whatran begin` / `whatran end`), so any
+language with a shell can do the same, and every record obeys the same rules.
+
+### Writing rules
+
+Records are short so that they cost few tokens and read the same from every
+agent. The rules follow Simplified Technical English (ASD-STE100): a step label
+starts with an approved verb and has at most 8 words (`Detect peaks`, not
+`Peak detection`); a claim, note or reason has sentences of at most 20 words;
+no pronouns, hedging, intensifiers or passive voice. A record that breaks a rule
+is refused with the fix spelled out. `--no-style` bypasses it for one record;
+`analysis/config.json` can add verbs (`"style": {"verbs": [...]}`), replace the
+list from a file, or disable the rules.
+
 Everything else (`log`, `status`, `update`, `publish`, …) is listed by
-`python3 analysis/whatran.py -h`.
+`whatran -h`.
 
 ## Three situations
 
@@ -125,6 +178,8 @@ plugins/whatran/
 ├── skills/package-analysis/        how to package, and what a pass means
 ├── schema/analysis-graph.schema.json
 └── viewer/index.html               the graph viewer (static)
+r/whatran/                          the R interface (calls the same command)
+pyproject.toml                      pip install whatran -> the `whatran` command and the Python API
 ```
 
 Design: [docs/DESIGN.md](docs/DESIGN.md). Tests: `python3 -m unittest discover -v`.

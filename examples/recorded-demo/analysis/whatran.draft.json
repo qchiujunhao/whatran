@@ -20,16 +20,16 @@
       ]
     },
     {
-      "id": "peak-detection-1",
-      "title": "Peak detection",
+      "id": "detect-peaks-1",
+      "title": "Detect peaks",
       "script": "scripts/detect_peaks.py",
       "produces": [
         "results/peaks.csv"
       ]
     },
     {
-      "id": "group-comparison-welch-t-test-1",
-      "title": "Group comparison, Welch t-test",
+      "id": "compare-groups-with-welch-t-test-1",
+      "title": "Compare groups with Welch t-test",
       "script": "scripts/stats.py",
       "produces": [
         "results/stats.json",

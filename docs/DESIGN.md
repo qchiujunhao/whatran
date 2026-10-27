@@ -174,6 +174,30 @@ method capture, or validity on new data. Subset runs must be labelled as such.
 
 The record stays complete; the package stays minimal; the manifest ties them.
 
+## The meaning layer: short, uniform, editable records
+
+Evidence is collected by machines; meaning is written by agents and people. To
+keep that writing cheap and comparable across agents and languages, records
+obey writing rules modelled on Simplified Technical English (ASD-STE100): a step
+label starts with an approved verb and has at most 8 words; sentences in claims,
+notes and reasons have at most 20 words; no pronouns, hedging, intensifiers or
+passive voice; plain words over formal ones. The rules are checked when a record
+is written, and a refusal names the fix. The verb list is the project's own
+(STE's dictionary is copyrighted): a built-in list written to STE's rules, which
+`analysis/config.json` can extend, replace from a file, or switch off.
+
+Records can be edited and removed at any time from the agent's point of view.
+Underneath, `edit` appends an `update` event and `remove` appends a `retract`
+event; the graph shows the latest state and hides retracted records, while the
+ledger keeps every version. An auditor can always see what was changed or
+withdrawn, which is what makes the record worth trusting.
+
+The same API exists for code in any language. `begin LABEL` snapshots the
+project and returns a token; `end TOKEN` diffs it and records the step with the
+files that changed as outputs. The Python API (`with w.step(...)`, `@w.step`)
+and the R package call exactly this, so a step recorded from R, Python or a
+shell has the same shape and the same evidence.
+
 ## The agent's interface
 
 Everything above is driven by a handful of commands, each needing one argument

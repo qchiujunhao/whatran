@@ -12,9 +12,9 @@ Commands are captured automatically (Claude Code hooks). You add the meaning:
 
 ```bash
 python3 <plugin root>/bin/whatran.py init      # once per project, before the first step (plugin root = two directories above this skill)
-python3 analysis/whatran.py record "Peak detection"       # after a step that produced something worth keeping
-python3 analysis/whatran.py claim "X is higher in group B (p < 0.05)"   # a finding
-python3 analysis/whatran.py reject run-peak-detection-1 --reason "called noise as peaks"
+python3 analysis/whatran.py record "Detect peaks"         # after a step that produced something worth keeping
+python3 analysis/whatran.py claim "Feature 301.1 is higher in group B (p < 0.05)"   # a finding
+python3 analysis/whatran.py reject run-detect-peaks-1 --reason "Threshold 1.1 calls noise as peaks"
 python3 analysis/whatran.py done               # at the end: compile, check files, draft the package
 ```
 
@@ -23,6 +23,44 @@ from the captured command; the output tells you what it inferred. If it got
 something wrong: `--in`, `--out`, `--code`, `--param k=v` override, or
 `update <id> --param k=v` afterwards. Outside Claude Code (Codex, a shell), run
 each step as `python3 analysis/whatran.py run -- <command>` so it is captured.
+
+## Writing rules (enforced)
+
+Every label, claim, note and reason must follow these rules; a record that
+breaks them is refused and the error names the fix. Keep to them and records
+stay short, uniform and cheap.
+
+- A step label starts with an approved verb and has at most 8 words:
+  `Detect peaks`, `Compare groups with Welch t-test`, `Fit linear model`.
+  Not `Peak detection`, not `Statistics`.
+- A claim, note or reason uses sentences of at most 20 words. State the
+  measured thing and the comparison: `Feature 301.1 is higher in group B (p < 0.05)`.
+- No pronouns (I, we, you), no hedging (maybe, seems, might, should), no
+  intensifiers (very, really), no passive voice (was, were, been).
+- Prefer the plain word: do, use, start, stop, before, after.
+- Technical words are fine as nouns (m/z, limma, FDR). If a verb you need is
+  missing, add it once to `analysis/config.json` under `"style": {"verbs": []}`.
+
+## Recording from inside code
+
+When you write the analysis as a script or notebook, record the steps in it
+instead of from the shell. Files that change inside a step become its outputs;
+the script becomes the code.
+
+```python
+import whatran as w                                   # pip install whatran, or sys.path to analysis/
+with w.step("Detect peaks", params={"threshold": 5}, inputs=["data/raw.csv"]) as s:
+    ...
+w.claim("Feature 301.1 is higher in group B (p < 0.05)", supports=[s])
+```
+
+```r
+source("analysis/whatran.R")   # from the plugin's r/whatran/R/whatran.R, or install the package
+id <- whatran_step("Detect peaks", { ... }, params = list(threshold = 5), inputs = "data/raw.csv")
+```
+
+Any language can do the same with `whatran.py begin "Label"` (prints a token)
+and `whatran.py end TOKEN --param k=v` around the code.
 
 ## When to record
 

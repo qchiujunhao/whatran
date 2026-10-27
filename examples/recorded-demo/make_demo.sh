@@ -19,15 +19,15 @@ $W update art-raw-signal-csv-1 --label "Raw signal (synthetic)" \
 
 # first attempt: too permissive; recorded, then rejected (it stays in the record)
 $W run -- python3 scripts/detect_peaks.py --threshold 1.1 data/raw_signal.csv results/peaks_loose.csv
-$W record "Peak detection (loose)"
-$W reject run-peak-detection-loose-1 --reason "threshold=1.1 called 27 bins as peaks, most of them noise; the mean spectrum shows them at the noise floor"
+$W record "Detect peaks (loose)"
+$W reject run-detect-peaks-loose-1 --reason "Threshold 1.1 calls 27 bins as peaks, most of them noise at the floor of the mean spectrum"
 
 # chosen attempt
 $W run -- python3 scripts/detect_peaks.py --threshold 5 data/raw_signal.csv results/peaks.csv
-$W record "Peak detection"
+$W record "Detect peaks"
 
 $W run -- python3 scripts/stats.py results/peaks.csv results/stats.json results/volcano.svg
-$W record "Group comparison, Welch t-test" --param test=welch --param alpha=0.05
+$W record "Compare groups with Welch t-test" --param test=welch --param alpha=0.05
 
 # a debugging command: captured, never recorded as a step
 $W run --quiet -- "python3 -c \"import json; d=json.load(open('results/stats.json')); print(len(d['features']), 'features')\""

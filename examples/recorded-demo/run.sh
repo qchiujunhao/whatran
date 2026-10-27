@@ -13,8 +13,8 @@ mkdir -p results
 # 01 Simulate raw signal  (run-simulate-raw-signal-1)
 python3 scripts/simulate.py --seed 7 --n 12 data/raw_signal.csv
 
-# 02 Peak detection  (run-peak-detection-1)
+# 02 Detect peaks  (run-detect-peaks-1)
 python3 scripts/detect_peaks.py --threshold 5 data/raw_signal.csv results/peaks.csv
 
-# 03 Group comparison, Welch t-test  (run-group-comparison-welch-t-test-1)
+# 03 Compare groups with Welch t-test  (run-compare-groups-with-welch-t-test-1)
 python3 scripts/stats.py results/peaks.csv results/stats.json results/volcano.svg

@@ -1,6 +1,6 @@
 {
   "name": "whatran",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "What ran? Whatran records what an AI agent actually ran during a scientific analysis as a checkable, result-centric Analysis Graph, then packages the final reported path so it reruns and checks on a fresh clone and shows itself on GitHub Pages.",
   "author": {
     "name": "Junhao Qiu"

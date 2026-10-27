@@ -1,7 +1,7 @@
 {
   "format": "analysis-graph/0.1",
-  "generator": "whatran.py/0.1.0",
-  "generated_at": "2026-10-14T19:19:59Z",
+  "generator": "whatran.py/0.3.0",
+  "generated_at": "2026-10-27T17:08:16Z",
   "project": {
     "name": "Synthetic LC-MS pilot",
     "description": "Which features differ between group A and group B in a simulated 12-sample experiment?"
@@ -15,14 +15,14 @@
       "sha256": "55419a23f262f5ac57c1e524913525ce0a7e68f08a8cffb4980a715a71a09bbf",
       "size": 56728,
       "exists": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:15Z",
       "recorded_by": "make_demo.sh",
       "note": "Stand-in for an mzML export. Three planted features at m/z 151.1 (A high), 301.1 (B high), 330.1 (equal).",
       "role": "intermediate",
       "generated_by": "run-simulate-raw-signal-1",
       "used_by": [
-        "run-peak-detection-loose-1",
-        "run-peak-detection-1"
+        "run-detect-peaks-loose-1",
+        "run-detect-peaks-1"
       ],
       "integrity": "intact",
       "on_main_path": true
@@ -54,9 +54,9 @@
         ],
         "source": "ag-run",
         "exit_code": 0,
-        "started": "2026-10-14T19:19:58Z",
-        "ended": "2026-10-14T19:19:58Z",
-        "duration_ms": 44,
+        "started": "2026-10-27T17:08:15Z",
+        "ended": "2026-10-27T17:08:15Z",
+        "duration_ms": 38,
         "cwd": ".",
         "stdout_head": "wrote data/raw_signal.csv: 12 samples x 250 bins\n",
         "stderr_head": "",
@@ -69,15 +69,15 @@
         "platform": "macOS-15.8.1-arm64-arm-64bit-Mach-O"
       },
       "git": {
-        "commit": "de87f6451b0b0958acd5b4a2fac52620795654c8",
+        "commit": "409b4eaa4a4b2256f6676728f7b48d5990282ef5",
         "dirty": true
       },
       "verified_by_replay": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:15Z",
       "recorded_by": "make_demo.sh",
       "on_main_path": true,
       "replay": {
-        "ts": "2026-10-14T19:19:59Z",
+        "ts": "2026-10-27T17:08:16Z",
         "source": "local-check",
         "manifest": "whatran.json"
       }
@@ -90,18 +90,18 @@
       "sha256": "33187036a1c8af18da14d070fea64e464200beacb04dc8086991ae49909179b0",
       "size": 7799,
       "exists": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:15Z",
       "recorded_by": "make_demo.sh",
       "role": "result",
-      "generated_by": "run-peak-detection-loose-1",
+      "generated_by": "run-detect-peaks-loose-1",
       "used_by": [],
       "integrity": "intact",
       "on_main_path": false
     },
     {
-      "id": "run-peak-detection-loose-1",
+      "id": "run-detect-peaks-loose-1",
       "type": "run",
-      "label": "Peak detection (loose)",
+      "label": "Detect peaks (loose)",
       "command": "python3 scripts/detect_peaks.py --threshold 1.1 data/raw_signal.csv results/peaks_loose.csv",
       "code": [
         {
@@ -126,9 +126,9 @@
         ],
         "source": "ag-run",
         "exit_code": 0,
-        "started": "2026-10-14T19:19:58Z",
-        "ended": "2026-10-14T19:19:58Z",
-        "duration_ms": 40,
+        "started": "2026-10-27T17:08:15Z",
+        "ended": "2026-10-27T17:08:15Z",
+        "duration_ms": 36,
         "cwd": ".",
         "stdout_head": "27 peaks above 1.1 x median (1.11) -> results/peaks_loose.csv\n",
         "stderr_head": "",
@@ -141,14 +141,14 @@
         "platform": "macOS-15.8.1-arm64-arm-64bit-Mach-O"
       },
       "git": {
-        "commit": "de87f6451b0b0958acd5b4a2fac52620795654c8",
+        "commit": "409b4eaa4a4b2256f6676728f7b48d5990282ef5",
         "dirty": true
       },
       "verified_by_replay": false,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:15Z",
       "recorded_by": "make_demo.sh",
-      "status_reason": "threshold=1.1 called 27 bins as peaks, most of them noise; the mean spectrum shows them at the noise floor",
-      "status_changed_at": "2026-10-14T19:19:58Z",
+      "status_reason": "Threshold 1.1 calls 27 bins as peaks, most of them noise at the floor of the mean spectrum",
+      "status_changed_at": "2026-10-27T17:08:15Z",
       "on_main_path": false
     },
     {
@@ -159,20 +159,20 @@
       "sha256": "f7b703b52efb4ebbe6dd945525429f7e3de2a95b37a14936ffd8877ca0714a52",
       "size": 920,
       "exists": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:16Z",
       "recorded_by": "make_demo.sh",
       "role": "intermediate",
-      "generated_by": "run-peak-detection-1",
+      "generated_by": "run-detect-peaks-1",
       "used_by": [
-        "run-group-comparison-welch-t-test-1"
+        "run-compare-groups-with-welch-t-test-1"
       ],
       "integrity": "intact",
       "on_main_path": true
     },
     {
-      "id": "run-peak-detection-1",
+      "id": "run-detect-peaks-1",
       "type": "run",
-      "label": "Peak detection",
+      "label": "Detect peaks",
       "command": "python3 scripts/detect_peaks.py --threshold 5 data/raw_signal.csv results/peaks.csv",
       "code": [
         {
@@ -197,8 +197,8 @@
         ],
         "source": "ag-run",
         "exit_code": 0,
-        "started": "2026-10-14T19:19:58Z",
-        "ended": "2026-10-14T19:19:58Z",
+        "started": "2026-10-27T17:08:16Z",
+        "ended": "2026-10-27T17:08:16Z",
         "duration_ms": 36,
         "cwd": ".",
         "stdout_head": "3 peaks above 5.0 x median (5.04) -> results/peaks.csv\n",
@@ -212,15 +212,15 @@
         "platform": "macOS-15.8.1-arm64-arm-64bit-Mach-O"
       },
       "git": {
-        "commit": "de87f6451b0b0958acd5b4a2fac52620795654c8",
+        "commit": "409b4eaa4a4b2256f6676728f7b48d5990282ef5",
         "dirty": true
       },
       "verified_by_replay": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:16Z",
       "recorded_by": "make_demo.sh",
       "on_main_path": true,
       "replay": {
-        "ts": "2026-10-14T19:19:59Z",
+        "ts": "2026-10-27T17:08:16Z",
         "source": "local-check",
         "manifest": "whatran.json"
       }
@@ -233,10 +233,10 @@
       "sha256": "a211f6692e98ba69d7df173ba7221bdd6dad3368af40c18228e5137fdb757608",
       "size": 766,
       "exists": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:16Z",
       "recorded_by": "make_demo.sh",
       "role": "result",
-      "generated_by": "run-group-comparison-welch-t-test-1",
+      "generated_by": "run-compare-groups-with-welch-t-test-1",
       "used_by": [],
       "integrity": "intact",
       "on_main_path": true
@@ -249,18 +249,18 @@
       "sha256": "90a3202e4194cb83ab66f09f8904bcae74f6631ef8bf189c5305d17a385e938c",
       "size": 1182,
       "exists": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:16Z",
       "recorded_by": "make_demo.sh",
       "role": "result",
-      "generated_by": "run-group-comparison-welch-t-test-1",
+      "generated_by": "run-compare-groups-with-welch-t-test-1",
       "used_by": [],
       "integrity": "intact",
       "on_main_path": true
     },
     {
-      "id": "run-group-comparison-welch-t-test-1",
+      "id": "run-compare-groups-with-welch-t-test-1",
       "type": "run",
-      "label": "Group comparison, Welch t-test",
+      "label": "Compare groups with Welch t-test",
       "command": "python3 scripts/stats.py results/peaks.csv results/stats.json results/volcano.svg",
       "code": [
         {
@@ -287,9 +287,9 @@
         ],
         "source": "ag-run",
         "exit_code": 0,
-        "started": "2026-10-14T19:19:58Z",
-        "ended": "2026-10-14T19:19:58Z",
-        "duration_ms": 21,
+        "started": "2026-10-27T17:08:16Z",
+        "ended": "2026-10-27T17:08:16Z",
+        "duration_ms": 24,
         "cwd": ".",
         "stdout_head": "3 peaks tested, 2 significant at alpha=0.05: m/z 151.1 (log2fc -0.70, p=2.1e-05), m/z 301.1 (log2fc +0.73, p=3.6e-05)\n",
         "stderr_head": "",
@@ -303,15 +303,15 @@
         "platform": "macOS-15.8.1-arm64-arm-64bit-Mach-O"
       },
       "git": {
-        "commit": "de87f6451b0b0958acd5b4a2fac52620795654c8",
+        "commit": "409b4eaa4a4b2256f6676728f7b48d5990282ef5",
         "dirty": true
       },
       "verified_by_replay": true,
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:16Z",
       "recorded_by": "make_demo.sh",
       "on_main_path": true,
       "replay": {
-        "ts": "2026-10-14T19:19:59Z",
+        "ts": "2026-10-27T17:08:16Z",
         "source": "local-check",
         "manifest": "whatran.json"
       }
@@ -324,7 +324,7 @@
         "art-volcano-svg-1"
       ],
       "status": "tentative",
-      "recorded_at": "2026-10-14T19:19:58Z",
+      "recorded_at": "2026-10-27T17:08:16Z",
       "recorded_by": "make_demo.sh",
       "on_main_path": true
     },
@@ -333,10 +333,10 @@
       "type": "claim",
       "label": "Feature at m/z 151.1 is higher in group A (Welch p < 0.05)",
       "supported_by": [
-        "run-group-comparison-welch-t-test-1"
+        "run-compare-groups-with-welch-t-test-1"
       ],
       "status": "tentative",
-      "recorded_at": "2026-10-14T19:19:59Z",
+      "recorded_at": "2026-10-27T17:08:16Z",
       "recorded_by": "make_demo.sh",
       "on_main_path": true
     }
@@ -349,36 +349,36 @@
     },
     {
       "from": "art-raw-signal-csv-1",
-      "to": "run-peak-detection-loose-1",
+      "to": "run-detect-peaks-loose-1",
       "kind": "used"
     },
     {
-      "from": "run-peak-detection-loose-1",
+      "from": "run-detect-peaks-loose-1",
       "to": "art-peaks-loose-csv-1",
       "kind": "generated"
     },
     {
       "from": "art-raw-signal-csv-1",
-      "to": "run-peak-detection-1",
+      "to": "run-detect-peaks-1",
       "kind": "used"
     },
     {
-      "from": "run-peak-detection-1",
+      "from": "run-detect-peaks-1",
       "to": "art-peaks-csv-1",
       "kind": "generated"
     },
     {
       "from": "art-peaks-csv-1",
-      "to": "run-group-comparison-welch-t-test-1",
+      "to": "run-compare-groups-with-welch-t-test-1",
       "kind": "used"
     },
     {
-      "from": "run-group-comparison-welch-t-test-1",
+      "from": "run-compare-groups-with-welch-t-test-1",
       "to": "art-stats-json-1",
       "kind": "generated"
     },
     {
-      "from": "run-group-comparison-welch-t-test-1",
+      "from": "run-compare-groups-with-welch-t-test-1",
       "to": "art-volcano-svg-1",
       "kind": "generated"
     },
@@ -388,7 +388,7 @@
       "kind": "supports"
     },
     {
-      "from": "run-group-comparison-welch-t-test-1",
+      "from": "run-compare-groups-with-welch-t-test-1",
       "to": "claim-feature-at-m-z-151-1-is-higher-in-group-1",
       "kind": "supports"
     }
@@ -397,10 +397,10 @@
     "art-raw-signal-csv-1",
     "run-simulate-raw-signal-1",
     "art-peaks-csv-1",
-    "run-peak-detection-1",
+    "run-detect-peaks-1",
     "art-stats-json-1",
     "art-volcano-svg-1",
-    "run-group-comparison-welch-t-test-1",
+    "run-compare-groups-with-welch-t-test-1",
     "claim-feature-at-m-z-301-1-is-higher-in-group-1",
     "claim-feature-at-m-z-151-1-is-higher-in-group-1"
   ],
@@ -429,26 +429,27 @@
       "total": 5,
       "linked": 4
     },
+    "retracted": 0,
     "main_path_nodes": 9
   },
   "exec_log": [
     {
       "id": "x-0001",
-      "ts": "2026-10-14T19:19:58Z",
+      "ts": "2026-10-27T17:08:15Z",
       "source": "ag-run",
       "command": "python3 scripts/simulate.py --seed 7 --n 12 data/raw_signal.csv",
       "cwd": ".",
       "exit_code": 0,
-      "started": "2026-10-14T19:19:58Z",
-      "ended": "2026-10-14T19:19:58Z",
-      "duration_ms": 44,
+      "started": "2026-10-27T17:08:15Z",
+      "ended": "2026-10-27T17:08:15Z",
+      "duration_ms": 38,
       "stdout_head": "wrote data/raw_signal.csv: 12 samples x 250 bins\n",
       "stderr_head": "",
       "files_changed": [
         {
           "path": "data/raw_signal.csv",
           "size": 56728,
-          "mtime": "2026-10-14T19:19:58Z",
+          "mtime": "2026-10-27T17:08:15Z",
           "sha256": "55419a23f262f5ac57c1e524913525ce0a7e68f08a8cffb4980a715a71a09bbf"
         }
       ],
@@ -458,37 +459,37 @@
     },
     {
       "id": "x-0002",
-      "ts": "2026-10-14T19:19:58Z",
+      "ts": "2026-10-27T17:08:15Z",
       "source": "ag-run",
       "command": "python3 scripts/detect_peaks.py --threshold 1.1 data/raw_signal.csv results/peaks_loose.csv",
       "cwd": ".",
       "exit_code": 0,
-      "started": "2026-10-14T19:19:58Z",
-      "ended": "2026-10-14T19:19:58Z",
-      "duration_ms": 40,
+      "started": "2026-10-27T17:08:15Z",
+      "ended": "2026-10-27T17:08:15Z",
+      "duration_ms": 36,
       "stdout_head": "27 peaks above 1.1 x median (1.11) -> results/peaks_loose.csv\n",
       "stderr_head": "",
       "files_changed": [
         {
           "path": "results/peaks_loose.csv",
           "size": 7799,
-          "mtime": "2026-10-14T19:19:58Z",
+          "mtime": "2026-10-27T17:08:15Z",
           "sha256": "33187036a1c8af18da14d070fea64e464200beacb04dc8086991ae49909179b0"
         }
       ],
       "files_changed_truncated": false,
       "interrupted": false,
-      "linked_run": "run-peak-detection-loose-1"
+      "linked_run": "run-detect-peaks-loose-1"
     },
     {
       "id": "x-0003",
-      "ts": "2026-10-14T19:19:58Z",
+      "ts": "2026-10-27T17:08:16Z",
       "source": "ag-run",
       "command": "python3 scripts/detect_peaks.py --threshold 5 data/raw_signal.csv results/peaks.csv",
       "cwd": ".",
       "exit_code": 0,
-      "started": "2026-10-14T19:19:58Z",
-      "ended": "2026-10-14T19:19:58Z",
+      "started": "2026-10-27T17:08:16Z",
+      "ended": "2026-10-27T17:08:16Z",
       "duration_ms": 36,
       "stdout_head": "3 peaks above 5.0 x median (5.04) -> results/peaks.csv\n",
       "stderr_head": "",
@@ -496,53 +497,53 @@
         {
           "path": "results/peaks.csv",
           "size": 920,
-          "mtime": "2026-10-14T19:19:58Z",
+          "mtime": "2026-10-27T17:08:16Z",
           "sha256": "f7b703b52efb4ebbe6dd945525429f7e3de2a95b37a14936ffd8877ca0714a52"
         }
       ],
       "files_changed_truncated": false,
       "interrupted": false,
-      "linked_run": "run-peak-detection-1"
+      "linked_run": "run-detect-peaks-1"
     },
     {
       "id": "x-0004",
-      "ts": "2026-10-14T19:19:58Z",
+      "ts": "2026-10-27T17:08:16Z",
       "source": "ag-run",
       "command": "python3 scripts/stats.py results/peaks.csv results/stats.json results/volcano.svg",
       "cwd": ".",
       "exit_code": 0,
-      "started": "2026-10-14T19:19:58Z",
-      "ended": "2026-10-14T19:19:58Z",
-      "duration_ms": 21,
+      "started": "2026-10-27T17:08:16Z",
+      "ended": "2026-10-27T17:08:16Z",
+      "duration_ms": 24,
       "stdout_head": "3 peaks tested, 2 significant at alpha=0.05: m/z 151.1 (log2fc -0.70, p=2.1e-05), m/z 301.1 (log2fc +0.73, p=3.6e-05)\n",
       "stderr_head": "",
       "files_changed": [
         {
           "path": "results/stats.json",
           "size": 766,
-          "mtime": "2026-10-14T19:19:58Z",
+          "mtime": "2026-10-27T17:08:16Z",
           "sha256": "a211f6692e98ba69d7df173ba7221bdd6dad3368af40c18228e5137fdb757608"
         },
         {
           "path": "results/volcano.svg",
           "size": 1182,
-          "mtime": "2026-10-14T19:19:58Z",
+          "mtime": "2026-10-27T17:08:16Z",
           "sha256": "90a3202e4194cb83ab66f09f8904bcae74f6631ef8bf189c5305d17a385e938c"
         }
       ],
       "files_changed_truncated": false,
       "interrupted": false,
-      "linked_run": "run-group-comparison-welch-t-test-1"
+      "linked_run": "run-compare-groups-with-welch-t-test-1"
     },
     {
       "id": "x-0005",
-      "ts": "2026-10-14T19:19:58Z",
+      "ts": "2026-10-27T17:08:16Z",
       "source": "ag-run",
       "command": "python3 -c \"import json; d=json.load(open('results/stats.json')); print(len(d['features']), 'features')\"",
       "cwd": ".",
       "exit_code": 0,
-      "started": "2026-10-14T19:19:58Z",
-      "ended": "2026-10-14T19:19:58Z",
+      "started": "2026-10-27T17:08:16Z",
+      "ended": "2026-10-27T17:08:16Z",
       "duration_ms": 20,
       "stdout_head": "3 features\n",
       "stderr_head": "",

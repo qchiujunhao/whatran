@@ -28,5 +28,9 @@
   "observe": {
     "enabled": true,
     "nudge": true
+  },
+  "style": {
+    "enabled": true,
+    "verbs": []
   }
 }
