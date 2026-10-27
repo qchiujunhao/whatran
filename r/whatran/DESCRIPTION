@@ -1,0 +1,12 @@
+Package: whatran
+Type: Package
+Title: Record What Ran: Steps, Claims and Evidence of an Analysis
+Version: 0.3.0
+Authors@R: person("Junhao", "Qiu", role = c("aut", "cre"))
+Description: A thin R interface to the whatran recorder. Wraps code in recorded
+    steps, records claims and rejections, and runs commands with captured
+    evidence. All calls go through the whatran command line, so the ledger,
+    the writing rules and the graph are the same for every language.
+License: MIT
+Encoding: UTF-8
+SystemRequirements: python3 and whatran (pip install whatran) or a project with analysis/whatran.py
