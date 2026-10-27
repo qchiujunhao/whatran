@@ -73,7 +73,7 @@ def handle_session_start(payload: dict) -> None:
     n_exec = sum(1 for e in p.events() if e.get("event") == "exec")
     emit_context(
         COMPLETION_RULE + f" This project already records (analysis/, {n_exec} executions captured). "
-        "After each meaningful step: `python3 analysis/whatran.py record \"<what it did>\"`; findings: "
+        "After each meaningful step: `python3 analysis/whatran.py record \"<Verb> <object>\"` (verb first, at most 8 words); findings: "
         "`claim \"...\"`; when finished: `done`, then `package` and `check`.",
         "SessionStart",
     )
@@ -197,7 +197,7 @@ def handle_tool(payload: dict) -> None:
         shown = ", ".join(f["path"] for f in files[:4]) + (" ..." if len(files) > 4 else "")
         emit_context(
             f"whatran: captured {ev['id']} (exit {exit_code}); changed: {shown}. "
-            f"If that was a scientific step, record it now: python3 analysis/whatran.py record \"<what it did>\" "
+            f"If that was a scientific step, record it now: python3 analysis/whatran.py record \"<Verb> <object>\" (e.g. \"Detect peaks\") "
             "(inputs, outputs, code and parameters are read from the command). Skip for debugging or throwaway output.",
             event,
         )

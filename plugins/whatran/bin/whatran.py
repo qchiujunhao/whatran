@@ -54,7 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 FORMAT = "analysis-graph/0.1"
 
 AG_DIRNAME = "analysis"
@@ -415,7 +415,7 @@ class Project:
         out.sort(key=lambda f: f["path"])
         return out, False
 
-    def make_exec_event(self, command: str, *, source: str, exit_code: Optional[int],
+    def make_exec_event(self, command: Optional[str], *, source: str, exit_code: Optional[int],
                         started: Optional[float], ended: Optional[float],
                         stdout: str = "", stderr: str = "", cwd: Optional[str] = None,
                         files_changed: Optional[List[Dict[str, Any]]] = None,
@@ -485,6 +485,8 @@ def fold_nodes(events: List[Dict[str, Any]]) -> "OrderedDict[str, Dict[str, Any]
                     if k in ("id", "type"):
                         continue
                     n[k] = v
+        elif kind == "retract":
+            nodes.pop(ev.get("id"), None)      # hidden from the graph; the ledger keeps the event
     return nodes
 
 
@@ -685,7 +687,8 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
                params: Dict[str, Any], command: Optional[str], evidence_mode: str,
                note: Optional[str], status: str, supersedes: Optional[str],
                node_id: Optional[str] = None, exec_event: Optional[Dict[str, Any]] = None,
-               infer: bool = True) -> Dict[str, Any]:
+               infer: bool = True, style: Optional[bool] = None) -> Dict[str, Any]:
+    enforce_style(p, label=label, sentences={"note": note}, enabled=style)
     events = p.events()
     nodes = fold_nodes(events)
     rel_in = [p.rel(x) for x in inputs]
@@ -831,7 +834,8 @@ def resolve_support(p: Project, nodes: "OrderedDict[str, Dict[str, Any]]", ref: 
 
 
 def record_claim(p: Project, text: str, supports: List[str], status: str, note: Optional[str],
-                 node_id: Optional[str] = None) -> Dict[str, Any]:
+                 node_id: Optional[str] = None, style: Optional[bool] = None) -> Dict[str, Any]:
+    enforce_style(p, sentences={"claim": text, "note": note}, enabled=style)
     events = p.events()
     nodes = fold_nodes(events)
     ids = [resolve_support(p, nodes, s) for s in supports]
@@ -985,6 +989,7 @@ def build_graph(p: Project, verify: bool = True) -> Dict[str, Any]:
             "rejected": sum(1 for c in claims if c.get("status") == "rejected"),
         },
         "executions": {"total": len(execs), "linked": sum(1 for e in execs if e["id"] in linked)},
+        "retracted": sum(1 for e in events if e.get("event") == "retract"),
         "main_path_nodes": len(main),
     }
 
@@ -1454,6 +1459,956 @@ if __name__ == "__main__":
 '''
 
 
+VIEWER_HTML = r'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analysis Graph</title>
+<meta name="description" content="Interactive, result-centric view of an Analysis Graph (analysis-graph/0.1): artifacts, runs, claims, and the execution evidence behind them.">
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1c1917; --muted: #6b6560; --line: #e4e1dd; --soft: #f1efeb;
+  --artifact: #2563eb; --artifact-bg: #eaf2ff; --run: #6d28d9; --run-bg: #f1ecfd; --claim: #047857; --claim-bg: #e6f7f0;
+  --warn: #c2410c; --bad: #b91c1c; --ok: #15803d; --accent: #0f766e; --edge: #b8b2ab; --lit: #0f766e;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15141a; --panel: #1d1c23; --ink: #ecebe8; --muted: #9d9892; --line: #312f38; --soft: #26242d;
+    --artifact: #7aa7ff; --artifact-bg: #1b2440; --run: #b79cff; --run-bg: #2a2140; --claim: #5fd3a3; --claim-bg: #16302a;
+    --warn: #f59e0b; --bad: #f87171; --ok: #4ade80; --accent: #5eead4; --edge: #5c5861; --lit: #5eead4;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15141a; --panel: #1d1c23; --ink: #ecebe8; --muted: #9d9892; --line: #312f38; --soft: #26242d;
+  --artifact: #7aa7ff; --artifact-bg: #1b2440; --run: #b79cff; --run-bg: #2a2140; --claim: #5fd3a3; --claim-bg: #16302a;
+  --warn: #f59e0b; --bad: #f87171; --ok: #4ade80; --accent: #5eead4; --edge: #5c5861; --lit: #5eead4;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+header .sub { color: var(--muted); font-size: 12px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--soft); color: var(--ink); white-space: nowrap; }
+.chip.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.chip.bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.chip.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+header .grow { flex: 1; }
+header input[type=search] { font: inherit; padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); min-width: 160px; }
+header label.toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+button { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+main { flex: 1; display: flex; min-height: 0; position: relative; }
+#canvas { flex: 1; position: relative; overflow: hidden; }
+#canvas svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+#canvas svg.dragging { cursor: grabbing; }
+#empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--muted); }
+#empty.show { display: flex; }
+#empty code { font-family: var(--mono); background: var(--soft); padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+#legend { position: absolute; left: 12px; bottom: 12px; background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 11px; color: var(--muted); display: grid; grid-template-columns: auto auto; gap: 3px 10px; backdrop-filter: blur(4px); }
+#legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; border: 1.5px solid currentColor; }
+#legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: -1px; margin-right: 5px; border: 1.5px solid currentColor; }
+#legend .dot.fill { background: currentColor; }
+aside#panel { width: 400px; max-width: 100%; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; padding: 16px 18px 28px; display: none; }
+aside#panel.show { display: block; }
+@media (max-width: 820px) { aside#panel { position: absolute; top: 0; right: 0; bottom: 0; width: 100%; box-shadow: -8px 0 24px rgba(0,0,0,.15); } }
+.ptype { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; font-weight: 650; }
+.ptype.artifact { color: var(--artifact); } .ptype.run { color: var(--run); } .ptype.claim { color: var(--claim); }
+aside h2 { font-size: 16px; margin: 4px 0 2px; line-height: 1.3; }
+aside .id { font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 6px; font-weight: 650; }
+aside pre { font-family: var(--mono); font-size: 12px; background: var(--soft); padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; margin: 0; max-height: 240px; overflow: auto; }
+aside table { border-collapse: collapse; width: 100%; font-size: 13px; }
+aside td { padding: 3px 6px 3px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+aside td:first-child { color: var(--muted); white-space: nowrap; width: 34%; }
+aside td code, aside li code { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+aside ul { margin: 0; padding-left: 18px; }
+aside li { margin: 2px 0; }
+aside a.ref { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; cursor: pointer; }
+aside .close { position: absolute; right: 14px; top: 10px; }
+aside .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+aside details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.hash { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+footer { padding: 7px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; background: var(--panel); display: flex; gap: 14px; flex-wrap: wrap; }
+footer b { color: var(--ink); font-weight: 600; }
+/* graph */
+.node { cursor: pointer; outline: none; }
+.node:focus-visible rect.box { stroke: var(--warn); stroke-width: 3; }
+.node rect.box { fill: var(--panel); stroke-width: 1.5; }
+.node.artifact rect.box { stroke: var(--artifact); fill: var(--artifact-bg); }
+.node.run rect.box { stroke: var(--run); fill: var(--run-bg); }
+.node.claim rect.box { stroke: var(--claim); fill: var(--claim-bg); rx: 26; }
+.node.rejected rect.box, .node.superseded rect.box { stroke-dasharray: 5 4; fill: var(--panel); }
+.node.failed rect.box { stroke: var(--bad); }
+.node text { pointer-events: none; }
+.node .tag { font-size: 10px; letter-spacing: .08em; font-weight: 700; }
+.node.artifact .tag { fill: var(--artifact); } .node.run .tag { fill: var(--run); } .node.claim .tag { fill: var(--claim); }
+.node .label { font-size: 13px; font-weight: 600; fill: var(--ink); }
+.node .subt { font-size: 11px; fill: var(--muted); font-family: var(--mono); }
+.node.sel rect.box { stroke-width: 3; }
+.node.dim, .edge.dim { opacity: .28; }
+.node.off rect.box { stroke-dasharray: 2 3; }
+.node.off { opacity: .55; }
+.node.hit rect.box { stroke: var(--warn); stroke-width: 3; }
+.badge circle { stroke-width: 1.5; }
+.badge.observed circle { fill: var(--run); stroke: var(--run); }
+.badge.declared circle { fill: var(--panel); stroke: var(--run); }
+.badge.intact circle { fill: var(--ok); stroke: var(--ok); }
+.badge.modified circle { fill: var(--warn); stroke: var(--warn); }
+.badge.missing circle { fill: var(--bad); stroke: var(--bad); }
+.badge.unchecked circle { fill: var(--panel); stroke: var(--muted); }
+.badge.tentative circle { fill: var(--panel); stroke: var(--claim); }
+.badge.supported circle { fill: var(--claim); stroke: var(--claim); }
+.badge text { font-size: 10px; font-weight: 700; fill: var(--panel); text-anchor: middle; }
+.badge.rejected text, .badge.failed text { fill: var(--ink); }
+.badge.rejected circle { fill: var(--soft); stroke: var(--muted); }
+.badge.failed circle { fill: var(--panel); stroke: var(--bad); }
+.badge.failed text { fill: var(--bad); }
+.edge path { fill: none; stroke: var(--edge); stroke-width: 1.6; marker-end: url(#arrow); }
+.edge.supports path { stroke: var(--claim); stroke-dasharray: 6 4; marker-end: url(#arrow-claim); }
+.edge.supersedes path { stroke-dasharray: 2 4; opacity: .7; marker-end: none; }
+.edge.lit path { stroke: var(--lit); stroke-width: 2.6; marker-end: url(#arrow-lit); }
+/* log modal */
+#log { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg) 70%, transparent); display: none; align-items: flex-start; justify-content: center; padding: 24px; overflow: auto; z-index: 5; }
+#log.show { display: flex; }
+#log .box { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(1100px, 100%); padding: 16px 18px; box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+#log table { border-collapse: collapse; width: 100%; font-size: 12px; }
+#log th, #log td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+#log td.cmd { font-family: var(--mono); word-break: break-all; }
+#log tr.unlinked td { color: var(--muted); }
+#log .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+#log .toolbar h2 { margin: 0; font-size: 15px; flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">Analysis Graph</h1>
+    <div class="sub" id="subtitle">loading…</div>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="grow"></div>
+  <input type="search" id="search" placeholder="Search nodes" aria-label="Search nodes">
+  <label class="toggle"><input type="checkbox" id="showAll"> <span id="showAllLabel">Show explored branches</span></label>
+  <button id="btnLog" type="button">Execution log</button>
+  <button id="btnFit" type="button" title="Fit (f)">Fit</button>
+</header>
+<main>
+  <div id="canvas">
+    <svg id="svg" role="img" aria-label="Analysis graph">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker>
+        <marker id="arrow-claim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--claim)"/></marker>
+        <marker id="arrow-lit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--lit)"/></marker>
+      </defs>
+      <g id="viewport"><g id="edges"></g><g id="nodes"></g></g>
+    </svg>
+    <div id="empty"></div>
+    <div id="legend">
+      <span><i class="sw" style="color:var(--artifact)"></i>artifact</span><span><i class="dot fill" style="color:var(--run)"></i>observed run</span>
+      <span><i class="sw" style="color:var(--run)"></i>run</span><span><i class="dot" style="color:var(--run)"></i>declared only</span>
+      <span><i class="sw" style="color:var(--claim)"></i>claim</span><span><i class="dot fill" style="color:var(--warn)"></i>artifact modified</span>
+      <span style="opacity:.6"><i class="sw" style="color:var(--muted);border-style:dashed"></i>rejected / off path</span><span><i class="dot fill" style="color:var(--bad)"></i>artifact missing</span>
+    </div>
+  </div>
+  <aside id="panel" aria-live="polite"></aside>
+  <div id="log" role="dialog" aria-modal="true" aria-label="Execution log"><div class="box"></div></div>
+</main>
+<footer id="footer"></footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  const NODE_W = 236, NODE_H = 60;
+  const qs = new URLSearchParams(location.search);
+  const GRAPH_URL = qs.get('graph') || 'graph.json';
+  const state = { graph: null, showAll: false, selected: null, query: '', pos: {}, vis: new Set(), deps: {}, k: 1, tx: 0, ty: 0 };
+  const $ = (id) => document.getElementById(id);
+  const svg = $('svg'), viewport = $('viewport'), gEdges = $('edges'), gNodes = $('nodes');
+  const SVGNS = 'http://www.w3.org/2000/svg';
+
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const trunc = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+  const short = (h) => h ? String(h).slice(0, 12) : '—';
+  const fmtParams = (p) => Object.entries(p || {}).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' · ');
+  const fmtBytes = (n) => n == null ? '—' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB';
+  const byId = () => { const m = {}; (state.graph.nodes || []).forEach((n) => { m[n.id] = n; }); return m; };
+
+  // ---------------------------------------------------------------- load
+  async function load() {
+    try {
+      const res = await fetch(GRAPH_URL, { cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status + ' ' + res.statusText);
+      state.graph = await res.json();
+    } catch (err) {
+      $('subtitle').textContent = 'no graph loaded';
+      const e = $('empty');
+      e.innerHTML = `<div><p><b>Could not load <code>${esc(GRAPH_URL)}</code></b> (${esc(err.message)}).</p>
+        <p>Build it with <code>python3 analysis/whatran.py done</code>. Browsers block <code>file://</code> fetches, so preview with <code>python3 analysis/whatran.py open</code> or publish to GitHub Pages.</p></div>`;
+      e.classList.add('show');
+      return;
+    }
+    const g = state.graph;
+    g.nodes = g.nodes || []; g.edges = g.edges || []; g.main_path = g.main_path || g.nodes.map((n) => n.id);
+    state.deps = {};
+    g.edges.forEach((e) => { if (e.kind !== 'supersedes') (state.deps[e.to] = state.deps[e.to] || []).push(e.from); });
+    const name = (g.project && g.project.name) || 'Analysis Graph';
+    document.title = name + ' · Analysis Graph';
+    $('title').textContent = name;
+    $('subtitle').textContent = `Analysis Graph · ${g.format || ''} · generated ${g.generated_at || '?'}` + ((g.project && g.project.description) ? ' · ' + g.project.description : '');
+    renderChips(); renderFooter();
+    const hidden = g.nodes.filter((n) => !g.main_path.includes(n.id)).length;
+    $('showAllLabel').textContent = hidden ? `Show explored branches (${hidden} hidden)` : 'Show explored branches (none hidden)';
+    if (qs.get('all') === '1') { state.showAll = true; $('showAll').checked = true; }
+    render(); fit();
+    const sel = qs.get('node'); if (sel && byId()[sel]) select(sel);
+  }
+
+  function renderChips() {
+    const s = state.graph.summary || {}; const r = s.runs || {}, a = s.artifacts || {}, c = s.claims || {};
+    const chips = [];
+    chips.push(`<span class="chip">${r.total || 0} runs</span>`);
+    if (r.declared) chips.push(`<span class="chip warn">${r.declared} declared only</span>`);
+    chips.push(`<span class="chip">${a.total || 0} artifacts</span>`);
+    if (a.modified) chips.push(`<span class="chip warn">${a.modified} modified</span>`);
+    if (a.missing) chips.push(`<span class="chip bad">${a.missing} missing</span>`);
+    chips.push(`<span class="chip">${c.total || 0} claims</span>`);
+    if (r.rejected) chips.push(`<span class="chip">${r.rejected} rejected</span>`);
+    $('chips').innerHTML = chips.join('');
+  }
+
+  function renderFooter() {
+    const s = state.graph.summary || {}; const r = s.runs || {}, a = s.artifacts || {}, x = s.executions || {};
+    const parts = [];
+    parts.push(`Provenance: <b>${r.observed || 0} of ${r.total || 0}</b> runs have observed execution evidence`);
+    parts.push(`<b>${a.intact || 0} of ${a.total || 0}</b> artifacts intact since recording`);
+    parts.push(`<b>${r.replay_verified || 0}</b> runs replay-verified`);
+    parts.push(`${x.total || 0} executions recorded (${(x.total || 0) - (x.linked || 0)} not linked to any node)`);
+    $('footer').innerHTML = parts.map((p) => `<span>${p}</span>`).join('');
+  }
+
+  // ---------------------------------------------------------------- layout
+  function visibleIds() {
+    const g = state.graph; const main = new Set(g.main_path);
+    return new Set(g.nodes.filter((n) => state.showAll || main.has(n.id)).map((n) => n.id));
+  }
+
+  function layout(ids) {
+    const g = state.graph; const pos = {};
+    const edges = g.edges.filter((e) => ids.has(e.from) && ids.has(e.to) && e.kind !== 'supersedes');
+    if (window.dagre) {
+      const dg = new dagre.graphlib.Graph();
+      dg.setGraph({ rankdir: 'TB', nodesep: 34, ranksep: 46, marginx: 24, marginy: 24 });
+      dg.setDefaultEdgeLabel(() => ({}));
+      ids.forEach((id) => dg.setNode(id, { width: NODE_W, height: NODE_H }));
+      edges.forEach((e) => dg.setEdge(e.from, e.to));
+      dagre.layout(dg);
+      ids.forEach((id) => { const n = dg.node(id); pos[id] = { x: n.x - NODE_W / 2, y: n.y - NODE_H / 2 }; });
+      return pos;
+    }
+    // fallback: longest-path layering, barycentre ordering
+    const preds = {}, succs = {}; ids.forEach((id) => { preds[id] = []; succs[id] = []; });
+    edges.forEach((e) => { preds[e.to].push(e.from); succs[e.from].push(e.to); });
+    const rank = {}; const order = Array.from(ids);
+    const visit = (id, seen) => { if (rank[id] != null) return rank[id]; if (seen.has(id)) return 0; seen.add(id); rank[id] = preds[id].length ? Math.max(...preds[id].map((p) => visit(p, seen))) + 1 : 0; return rank[id]; };
+    order.forEach((id) => visit(id, new Set()));
+    const rows = {}; order.forEach((id) => (rows[rank[id]] = rows[rank[id]] || []).push(id));
+    const xOf = {};
+    Object.keys(rows).map(Number).sort((a, b) => a - b).forEach((r) => {
+      const row = rows[r];
+      row.sort((a, b) => { const ba = preds[a].length ? preds[a].reduce((s, p) => s + (xOf[p] || 0), 0) / preds[a].length : 0; const bb = preds[b].length ? preds[b].reduce((s, p) => s + (xOf[p] || 0), 0) / preds[b].length : 0; return ba - bb; });
+      row.forEach((id, i) => { xOf[id] = i * (NODE_W + 34); pos[id] = { x: xOf[id] + 24, y: r * (NODE_H + 46) + 24 }; });
+    });
+    return pos;
+  }
+
+  // ---------------------------------------------------------------- render
+  function el(tag, attrs, text) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; }
+
+  function subtitleOf(n) {
+    if (n.type === 'run') { const p = fmtParams(n.params); return p || (n.command ? trunc(n.command, 40) : ''); }
+    if (n.type === 'artifact') return (n.path || '') + (n.version ? '  v' + n.version : '');
+    return n.status || '';
+  }
+  function badgeOf(n) {
+    if (n.type === 'run') {
+      if (n.status === 'rejected') return { cls: 'rejected', text: '⊘', title: 'rejected: ' + (n.status_reason || '') };
+      if (n.status === 'superseded') return { cls: 'rejected', text: '↻', title: 'superseded' };
+      if (n.status === 'failed') return { cls: 'failed', text: '!', title: 'failed' };
+      const lvl = (n.evidence && n.evidence.level) || 'declared';
+      return { cls: lvl, text: '', title: lvl === 'observed' ? 'execution observed' : 'declared by the agent, no execution evidence' };
+    }
+    if (n.type === 'artifact') return { cls: n.integrity || 'unchecked', text: '', title: 'integrity: ' + (n.integrity || 'unchecked') };
+    if (n.status === 'rejected') return { cls: 'rejected', text: '⊘', title: 'rejected' };
+    return { cls: n.status || 'tentative', text: '', title: 'claim status: ' + (n.status || 'tentative') };
+  }
+
+  function render() {
+    const g = state.graph; const ids = visibleIds(); state.vis = ids; state.pos = layout(ids);
+    gEdges.innerHTML = ''; gNodes.innerHTML = '';
+    const main = new Set(g.main_path); const q = state.query.trim().toLowerCase();
+    g.edges.forEach((e) => {
+      if (!ids.has(e.from) || !ids.has(e.to)) return;
+      const a = state.pos[e.from], b = state.pos[e.to];
+      const sx = a.x + NODE_W / 2, sy = a.y + NODE_H, tx = b.x + NODE_W / 2, ty = b.y;
+      const my = (sy + ty) / 2;
+      const d = e.kind === 'supersedes'
+        ? `M${a.x + NODE_W},${a.y + NODE_H / 2} C${a.x + NODE_W + 40},${a.y + NODE_H / 2} ${b.x + NODE_W + 40},${b.y + NODE_H / 2} ${b.x + NODE_W},${b.y + NODE_H / 2}`
+        : `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
+      const ge = el('g', { class: 'edge ' + e.kind, 'data-from': e.from, 'data-to': e.to });
+      const path = el('path', { d });
+      path.appendChild(el('title', {}, `${e.from} —${e.kind}→ ${e.to}`));
+      ge.appendChild(path); gEdges.appendChild(ge);
+    });
+    g.nodes.forEach((n) => {
+      if (!ids.has(n.id)) return;
+      const p = state.pos[n.id];
+      const cls = ['node', n.type, n.status || ''];
+      if (!main.has(n.id)) cls.push('off');
+      if (q && (n.label || '').toLowerCase().includes(q) || q && (n.path || '').toLowerCase().includes(q) || q && n.id.toLowerCase().includes(q)) cls.push('hit');
+      const gn = el('g', { class: cls.join(' ').trim(), transform: `translate(${p.x},${p.y})`, 'data-id': n.id, tabindex: 0, role: 'button' });
+      gn.appendChild(el('rect', { class: 'box', width: NODE_W, height: NODE_H, rx: 10 }));
+      gn.appendChild(el('text', { class: 'tag', x: 14, y: 17 }, n.type.toUpperCase() + (n.type === 'artifact' && n.role ? ' · ' + n.role.toUpperCase() : '')));
+      gn.appendChild(el('text', { class: 'label', x: 14, y: 36 }, trunc(n.label || n.id, 30)));
+      gn.appendChild(el('text', { class: 'subt', x: 14, y: 52 }, trunc(subtitleOf(n), 36)));
+      const b = badgeOf(n);
+      const gb = el('g', { class: 'badge ' + b.cls, transform: `translate(${NODE_W - 16},16)` });
+      gb.appendChild(el('circle', { r: 6 }));
+      if (b.text) gb.appendChild(el('text', { y: 3.5 }, b.text));
+      gb.appendChild(el('title', {}, b.title));
+      gn.appendChild(gb);
+      gn.appendChild(el('title', {}, (n.label || n.id) + '\n' + n.id));
+      gn.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(n.id); } });
+      gNodes.appendChild(gn);
+    });
+    applyHighlight();
+  }
+
+  function ancestors(id) {
+    const out = new Set(); const stack = [id];
+    while (stack.length) { const n = stack.pop(); if (out.has(n)) continue; out.add(n); (state.deps[n] || []).forEach((d) => stack.push(d)); }
+    return out;
+  }
+  function applyHighlight() {
+    const sel = state.selected;
+    const lit = sel ? ancestors(sel) : null;
+    gNodes.querySelectorAll('.node').forEach((n) => {
+      const id = n.getAttribute('data-id');
+      n.classList.toggle('sel', id === sel);
+      n.classList.toggle('dim', !!lit && !lit.has(id));
+    });
+    gEdges.querySelectorAll('.edge').forEach((e) => {
+      const f = e.getAttribute('data-from'), t = e.getAttribute('data-to');
+      const on = !!lit && lit.has(f) && lit.has(t) && !e.classList.contains('supersedes');
+      e.classList.toggle('lit', on);
+      e.classList.toggle('dim', !!lit && !on);
+    });
+  }
+
+  // ---------------------------------------------------------------- panel
+  function ref(id) { const n = byId()[id]; return n ? `<a class="ref" data-ref="${esc(id)}">${esc(n.label || id)}</a> <span class="hash">${esc(id)}</span>` : `<code>${esc(id)}</code>`; }
+  function artifactLine(id) { const n = byId()[id]; if (!n) return `<li><code>${esc(id)}</code></li>`; return `<li>${ref(id)}<br><code>${esc(n.path || '')}</code> <span class="hash">${short(n.sha256)}</span>${n.integrity && n.integrity !== 'intact' ? ` <span class="chip ${n.integrity === 'missing' ? 'bad' : 'warn'}">${esc(n.integrity)}</span>` : ''}</li>`; }
+  function row(k, v) { return v == null || v === '' ? '' : `<tr><td>${esc(k)}</td><td>${v}</td></tr>`; }
+
+  function select(id) {
+    state.selected = id; applyHighlight();
+    const n = byId()[id]; if (!n) return;
+    const panel = $('panel'); const parts = [];
+    parts.push(`<button class="close" type="button" id="btnClose" aria-label="Close">✕</button>`);
+    parts.push(`<div class="ptype ${n.type}">${esc(n.type)}${n.role ? ' · ' + esc(n.role) : ''}</div>`);
+    parts.push(`<h2>${esc(n.label || n.id)}</h2><div class="id">${esc(n.id)}</div>`);
+    const chips = [];
+    if (n.status) chips.push(`<span class="chip ${n.status === 'rejected' || n.status === 'failed' ? 'warn' : ''}">${esc(n.status)}</span>`);
+    if (n.type === 'run') { const lvl = (n.evidence && n.evidence.level) || 'declared'; chips.push(`<span class="chip ${lvl === 'observed' ? 'ok' : 'warn'}">${lvl === 'observed' ? 'execution observed' : 'declared only'}</span>`); chips.push(`<span class="chip ${n.verified_by_replay ? 'ok' : ''}">${n.verified_by_replay ? 'replay verified' : 'not replay-verified'}</span>`); }
+    if (n.type === 'artifact') chips.push(`<span class="chip ${n.integrity === 'intact' ? 'ok' : n.integrity === 'missing' ? 'bad' : n.integrity === 'modified' ? 'warn' : ''}">${esc(n.integrity || 'unchecked')}</span>`);
+    if (!state.graph.main_path.includes(n.id)) chips.push(`<span class="chip">not on the result path</span>`);
+    parts.push(`<div class="chips" style="margin-top:8px">${chips.join('')}</div>`);
+    if (n.status_reason) parts.push(`<p style="color:var(--muted);margin:8px 0 0">${esc(n.status_reason)}</p>`);
+    if (n.note) parts.push(`<p style="margin:10px 0 0">${esc(n.note)}</p>`);
+
+    if (n.type === 'run') {
+      if (n.command) parts.push(`<h3>Command</h3><pre>${esc(n.command)}</pre>`);
+      const params = Object.entries(n.params || {});
+      if (params.length) parts.push(`<h3>Parameters</h3><table>${params.map(([k, v]) => row(k, `<code>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</code>`)).join('')}</table>`);
+      if ((n.code || []).length) parts.push(`<h3>Code</h3><ul>${n.code.map((c) => `<li><code>${esc(c.path)}</code> <span class="hash">${short(c.sha256)}</span></li>`).join('')}</ul>`);
+      parts.push(`<h3>Inputs (${(n.inputs || []).length})</h3>${(n.inputs || []).length ? `<ul>${n.inputs.map(artifactLine).join('')}</ul>` : '<span class="hash">none declared</span>'}`);
+      parts.push(`<h3>Outputs (${(n.outputs || []).length})</h3>${(n.outputs || []).length ? `<ul>${n.outputs.map(artifactLine).join('')}</ul>` : '<span class="hash">none declared</span>'}`);
+      const ev = n.evidence || {};
+      let evRows = row('level', esc(ev.level || 'declared'));
+      if (ev.level === 'observed') {
+        evRows += row('execution', (ev.exec_ids || []).map((x) => `<code>${esc(x)}</code>`).join(', '));
+        evRows += row('source', esc(ev.source));
+        evRows += row('exit code', ev.exit_code == null ? '<span class="hash">unknown</span>' : `<code>${esc(ev.exit_code)}</code>`);
+        evRows += row('started', esc(ev.started));
+        evRows += row('duration', ev.duration_ms == null ? null : (ev.duration_ms / 1000).toFixed(1) + ' s');
+        evRows += row('outputs observed', `${(ev.outputs_observed || []).length} of ${(n.outputs || []).length} declared outputs were seen changing with matching hashes`);
+      } else {
+        evRows += row('meaning', 'the agent declared this step; no execution was captured. Treat command, parameters and outputs as unverified.');
+      }
+      parts.push(`<h3>Evidence</h3><table>${evRows}</table>`);
+      if (ev.stdout_head || ev.stderr_head) parts.push(`<details style="margin-top:8px"><summary>output head</summary><pre>${esc(ev.stdout_head || '')}${ev.stderr_head ? '\n--- stderr ---\n' + esc(ev.stderr_head) : ''}</pre></details>`);
+      const envRows = row('python', esc((n.environment || {}).python)) + row('platform', esc((n.environment || {}).platform)) + row('git', n.git ? `<code>${esc(short(n.git.commit))}</code>${n.git.dirty ? ' <span class="chip warn">dirty tree</span>' : ''}` : null) + row('recorded', esc(n.recorded_at) + (n.recorded_by ? ' by ' + esc(n.recorded_by) : ''));
+      if (n.supersedes) envRows += row('supersedes', ref(n.supersedes));
+      parts.push(`<h3>Environment</h3><table>${envRows}</table>`);
+    } else if (n.type === 'artifact') {
+      let rows = row('path', `<code>${esc(n.path)}</code>`) + row('size', fmtBytes(n.size)) + row('sha256', n.sha256 ? `<code>${esc(n.sha256)}</code>` : '<span class="hash">not hashed (missing or too large)</span>') + row('integrity', esc(n.integrity || 'unchecked')) + row('origin', esc(n.origin)) + row('version', n.version ? 'v' + n.version : null) + row('recorded', esc(n.recorded_at));
+      parts.push(`<h3>File</h3><table>${rows}</table>`);
+      if (n.generated_by) parts.push(`<h3>Generated by</h3><ul><li>${ref(n.generated_by)}</li></ul>`);
+      if ((n.used_by || []).length) parts.push(`<h3>Used by</h3><ul>${n.used_by.map((r) => `<li>${ref(r)}</li>`).join('')}</ul>`);
+      if (n.supersedes) parts.push(`<h3>Supersedes</h3><ul><li>${ref(n.supersedes)}</li></ul>`);
+    } else {
+      parts.push(`<h3>Supported by (${(n.supported_by || []).length})</h3>${(n.supported_by || []).length ? `<ul>${n.supported_by.map((s) => `<li>${ref(s)}</li>`).join('')}</ul>` : '<span class="chip warn">no supporting evidence recorded</span>'}`);
+      parts.push(`<p style="color:var(--muted);font-size:12px;margin-top:10px">A claim records what was concluded and from which computations. It does not mean the conclusion has been independently validated.</p>`);
+    }
+    parts.push(`<div class="actions"><button class="primary" type="button" id="btnCopy">Copy context for an agent</button><button type="button" id="btnBranch">Copy “branch from here” prompt</button></div>`);
+    panel.innerHTML = parts.join(''); panel.classList.add('show');
+    $('btnClose').onclick = () => { panel.classList.remove('show'); state.selected = null; applyHighlight(); };
+    $('btnCopy').onclick = () => copyText(contextFor(n), $('btnCopy'));
+    $('btnBranch').onclick = () => copyText(branchPromptFor(n), $('btnBranch'));
+    panel.querySelectorAll('a.ref').forEach((a) => a.addEventListener('click', () => { const id = a.getAttribute('data-ref'); if (!state.vis.has(id)) { state.showAll = true; $('showAll').checked = true; render(); } select(id); centerOn(id); }));
+  }
+
+  function contextFor(n) {
+    const m = byId(); const L = [];
+    L.push(`# Analysis Graph node: ${n.label || n.id} (${n.id})`);
+    L.push(`type: ${n.type}${n.status ? '  status: ' + n.status : ''}`);
+    if (n.type === 'run') {
+      if (n.command) L.push(`command: ${n.command}`);
+      (n.code || []).forEach((c) => L.push(`code: ${c.path} (sha256 ${short(c.sha256)})`));
+      const p = fmtParams(n.params); if (p) L.push(`params: ${p}`);
+      (n.inputs || []).forEach((i) => { const a = m[i] || {}; L.push(`input: ${a.path || i} (sha256 ${short(a.sha256)}, ${a.integrity || 'unchecked'})`); });
+      (n.outputs || []).forEach((o) => { const a = m[o] || {}; L.push(`output: ${a.path || o} (sha256 ${short(a.sha256)}, ${a.integrity || 'unchecked'})`); });
+      const ev = n.evidence || {}; L.push(`evidence: ${ev.level || 'declared'}${ev.exec_ids && ev.exec_ids.length ? ' (' + ev.exec_ids.join(', ') + ', exit ' + ev.exit_code + ')' : ''}`);
+      if (n.git) L.push(`git: ${n.git.commit}${n.git.dirty ? ' (dirty)' : ''}`);
+    } else if (n.type === 'artifact') {
+      L.push(`path: ${n.path}`); L.push(`sha256: ${n.sha256 || 'n/a'}  integrity: ${n.integrity || 'unchecked'}`);
+      if (n.generated_by) L.push(`generated by: ${(m[n.generated_by] || {}).label || n.generated_by} (${n.generated_by})`);
+    } else {
+      (n.supported_by || []).forEach((s) => L.push(`supported by: ${(m[s] || {}).label || s} (${s})`));
+    }
+    if (n.note) L.push(`note: ${n.note}`);
+    return L.join('\n');
+  }
+  function branchPromptFor(n) {
+    return contextFor(n) + `\n\nContinue the analysis from this node. Do not overwrite it: a changed parameter or method must become a new run recorded with\n  python3 analysis/whatran.py record "<what it did>" --supersedes ${n.id}\n(inputs, outputs, code and parameters are read from the command you ran; add --param k=v if a value is missed), then re-run only the downstream steps that depend on it, record them, and finish with \`python3 analysis/whatran.py done\`. Mark the branch you abandon with \`whatran.py reject\` instead of deleting it.`;
+  }
+  async function copyText(text, btn) {
+    try { await navigator.clipboard.writeText(text); } catch (e) {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (_) { /* ignore */ } ta.remove();
+    }
+    const old = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = old; }, 1200);
+  }
+
+  // ---------------------------------------------------------------- log
+  function showLog() {
+    const g = state.graph; const m = byId(); const log = g.exec_log || [];
+    const rows = log.slice().reverse().map((e) => `<tr class="${e.linked_run ? '' : 'unlinked'}"><td><code>${esc(e.id)}</code></td><td>${esc((e.ts || '').replace('T', ' ').replace('Z', ''))}</td><td>${e.exit_code == null ? '?' : esc(e.exit_code)}</td><td>${(e.files_changed || []).length}${e.files_changed_truncated ? '+' : ''}</td><td>${e.linked_run ? `<a class="ref" data-ref="${esc(e.linked_run)}">${esc((m[e.linked_run] || {}).label || e.linked_run)}</a>` : '<span class="hash">—</span>'}</td><td class="cmd">${esc(trunc(e.command || '', 160))}</td></tr>`).join('');
+    const box = $('log').querySelector('.box');
+    box.innerHTML = `<div class="toolbar"><h2>Execution log — every recorded command, including ones not linked to a node (${log.length})</h2><button type="button" id="btnLogClose">Close</button></div>` + (log.length ? `<table><thead><tr><th>id</th><th>time (UTC)</th><th>exit</th><th>files</th><th>linked run</th><th>command</th></tr></thead><tbody>${rows}</tbody></table>` : '<p style="color:var(--muted)">No executions recorded. Hooks or <code>whatran.py run</code> write them.</p>');
+    $('log').classList.add('show');
+    $('btnLogClose').onclick = () => $('log').classList.remove('show');
+    box.querySelectorAll('a.ref').forEach((a) => a.addEventListener('click', () => { $('log').classList.remove('show'); const id = a.getAttribute('data-ref'); if (!state.vis.has(id)) { state.showAll = true; $('showAll').checked = true; render(); } select(id); centerOn(id); }));
+  }
+
+  // ---------------------------------------------------------------- pan / zoom
+  function applyTransform() { viewport.setAttribute('transform', `translate(${state.tx},${state.ty}) scale(${state.k})`); }
+  function bounds() { const ps = Object.values(state.pos); if (!ps.length) return { x: 0, y: 0, w: NODE_W, h: NODE_H }; const x0 = Math.min(...ps.map((p) => p.x)), y0 = Math.min(...ps.map((p) => p.y)); const x1 = Math.max(...ps.map((p) => p.x)) + NODE_W, y1 = Math.max(...ps.map((p) => p.y)) + NODE_H; return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }; }
+  function fit() { const r = svg.getBoundingClientRect(); const b = bounds(); const k = Math.min(1.2, Math.max(0.15, Math.min((r.width - 48) / b.w, (r.height - 48) / b.h))); state.k = k; state.tx = (r.width - b.w * k) / 2 - b.x * k; state.ty = Math.max(24, (r.height - b.h * k) / 2 - b.y * k); applyTransform(); }
+  function centerOn(id) { const p = state.pos[id]; if (!p) return; const r = svg.getBoundingClientRect(); state.tx = r.width / 2 - (p.x + NODE_W / 2) * state.k; state.ty = r.height / 2 - (p.y + NODE_H / 2) * state.k; applyTransform(); }
+  // Selection happens on pointer-up: pointer capture (needed for smooth panning) re-targets
+  // the synthetic click to the <svg>, so node click listeners would never fire.
+  let drag = null;
+  svg.addEventListener('pointerdown', (e) => { if (e.button !== 0) return; const node = e.target.closest ? e.target.closest('.node') : null; drag = { x: e.clientX, y: e.clientY, tx: state.tx, ty: state.ty, moved: false, node: node ? node.getAttribute('data-id') : null }; svg.setPointerCapture(e.pointerId); svg.classList.add('dragging'); });
+  svg.addEventListener('pointermove', (e) => { if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true; state.tx = drag.tx + dx; state.ty = drag.ty + dy; applyTransform(); });
+  svg.addEventListener('pointerup', () => { const d = drag; drag = null; svg.classList.remove('dragging'); if (!d || d.moved) return; if (d.node) select(d.node); else { state.selected = null; applyHighlight(); $('panel').classList.remove('show'); } });
+  svg.addEventListener('pointercancel', () => { drag = null; svg.classList.remove('dragging'); });
+  svg.addEventListener('wheel', (e) => { e.preventDefault(); const r = svg.getBoundingClientRect(); const mx = e.clientX - r.left, my = e.clientY - r.top; const f = Math.exp(-e.deltaY * 0.0015); const k = Math.min(3, Math.max(0.1, state.k * f)); state.tx = mx - (mx - state.tx) * (k / state.k); state.ty = my - (my - state.ty) * (k / state.k); state.k = k; applyTransform(); }, { passive: false });
+
+  // ---------------------------------------------------------------- controls
+  $('showAll').addEventListener('change', (e) => { state.showAll = e.target.checked; render(); fit(); });
+  $('search').addEventListener('input', (e) => { state.query = e.target.value; render(); });
+  $('btnFit').addEventListener('click', fit);
+  $('btnLog').addEventListener('click', showLog);
+  document.addEventListener('keydown', (e) => { if (e.target.tagName === 'INPUT') return; if (e.key === 'Escape') { $('log').classList.remove('show'); $('panel').classList.remove('show'); state.selected = null; applyHighlight(); } if (e.key === 'f') fit(); });
+  window.addEventListener('resize', () => { if (state.graph) fit(); });
+  load();
+})();
+</script>
+</body>
+</html>
+'''
+
+# --------------------------------------------------------------------------- #
+# writing rules (Simplified-Technical-English style) for labels, claims, notes
+# --------------------------------------------------------------------------- #
+#
+# Records must be short and uniform so that they cost few tokens, read the same
+# whichever agent or language wrote them, and can be matched by programs.
+# The rules follow ASD-STE100's spirit: a step label starts with an approved verb
+# and has at most 8 words; every sentence in a claim, note or reason has at most
+# 20 words; no pronouns, no hedging, no passive voice. The official STE
+# dictionary is copyrighted, so the verb list below is our own, written to the
+# same rules (one meaning, infinitive form); projects can replace or extend it
+# in analysis/config.json ("style": {"verbs": [...], "verbs_file": "path"}).
+
+BUILTIN_VERBS = sorted(set("""
+add adjust align annotate apply approximate assemble assign average bin build
+calculate calibrate call check choose classify clean clip close cluster collect
+combine compare compile compress compute concatenate configure confirm convert
+copy correct count create crop cut decode deduplicate define delete denoise
+derive detect digitize discard divide do download downsample draw drop embed
+encode estimate evaluate exclude expand export extract fetch fill filter find
+fit flag format generate get group identify impute import include index infer
+install integrate interpolate join keep label list load locate make map mark
+mask match measure merge model move normalise normalize open optimise optimize
+order pad parse partition plot predict prepare print process profile prune
+quantify query rank read record reduce regress reject remove rename render
+repeat replace report resample rescale reshape resolve round run sample save
+scale score search segment select separate set show simulate smooth sort split
+stack standardise standardize start stop store subset subtract sum summarise
+summarize tag test threshold tokenize train transform trim tune update upload
+use validate verify visualise visualize write
+""".split()))
+
+FORBIDDEN_WORDS = {
+    "i", "we", "you", "me", "my", "our", "your", "us",
+    "maybe", "perhaps", "probably", "seems", "seem", "appears", "appear",
+    "might", "could", "should", "would", "very", "really", "quite", "somewhat",
+    "basically", "essentially", "just", "actually", "etc", "etc.",
+    "was", "were", "been", "being",
+}
+
+PREFERRED_WORDS = {
+    "perform": "do", "utilize": "use", "utilise": "use", "commence": "start",
+    "terminate": "stop", "in order to": "to", "prior to": "before",
+    "subsequent to": "after", "carry out": "do", "a number of": "several",
+}
+
+STYLE_DEFAULT: Dict[str, Any] = {
+    "enabled": True,
+    "max_label_words": 8,
+    "max_sentence_words": 20,
+    "verbs": [],          # extra approved verbs for this project
+    "verbs_file": None,   # one verb per line; replaces the built-in list when set
+}
+
+
+class StyleError(AgError):
+    """A label or sentence breaks the writing rules."""
+
+
+def _words(text: str) -> List[str]:
+    return [w for w in re.split(r"\s+", text.strip()) if w]
+
+
+def _norm(word: str) -> str:
+    return re.sub(r"^[^a-z0-9]+|[^a-z0-9]+$", "", word.lower())
+
+
+def approved_verbs(p: Optional["Project"]) -> set:
+    cfg = dict(STYLE_DEFAULT)
+    if p is not None:
+        cfg.update(p.config.get("style") or {})
+    verbs = set(BUILTIN_VERBS)
+    vf = cfg.get("verbs_file")
+    if vf:
+        path = (p.root / vf) if (p is not None and not os.path.isabs(vf)) else Path(vf)
+        if path.is_file():
+            verbs = {_norm(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
+    verbs.update(_norm(v) for v in (cfg.get("verbs") or []))
+    return verbs
+
+
+def _verb_from_noun(word: str, verbs: set) -> Optional[str]:
+    """detection -> detect, comparison -> compare, normalization -> normalize."""
+    w = _norm(word)
+    for cand in (w, w[:-3], w[:-4] + "e", w[:-5] + "e", w[:-5], w[:-2]):
+        if len(cand) > 2 and cand in verbs:
+            return cand
+    return None
+
+
+def check_label(label: str, p: Optional["Project"] = None) -> List[str]:
+    """Problems with a step label; empty when it follows the rules."""
+    cfg = dict(STYLE_DEFAULT)
+    if p is not None:
+        cfg.update(p.config.get("style") or {})
+    problems: List[str] = []
+    words = _words(label)
+    if not words:
+        return ["label is empty"]
+    if len(words) > int(cfg["max_label_words"]):
+        problems.append(f"{len(words)} words; keep a label to {cfg['max_label_words']} words")
+    verbs = approved_verbs(p)
+    first = _norm(words[0])
+    if first not in verbs:
+        hint = None
+        for i, w in enumerate(words):
+            v = _verb_from_noun(w, verbs)
+            if v:
+                rest = [x.lower() if x.isalpha() else x for x in words if x is not w]
+                if i == 1 and rest and rest[0].isalpha() and not rest[0].endswith(("s", "x", "z", "a", "y", "ch", "sh")):
+                    rest[0] += "s"                      # "Peak detection" -> "Detect peaks"
+                hint = f'"{v.capitalize()} {" ".join(rest)}"'.replace("  ", " ").strip()
+                break
+        problems.append(f'start with an approved verb ("{words[0]}" is not one)' + (f"; for example {hint}" if hint else
+                        "; for example \"Detect peaks\", \"Compare groups\", \"Fit model\""))
+    problems += _check_words(label)
+    if label.rstrip().endswith("."):
+        problems.append("no full stop at the end of a label")
+    return problems
+
+
+def _check_words(text: str) -> List[str]:
+    problems: List[str] = []
+    low = " " + re.sub(r"\s+", " ", text.lower()) + " "
+    bad = sorted({w for w in (_norm(x) for x in _words(text)) if w in FORBIDDEN_WORDS})
+    if bad:
+        problems.append("avoid " + ", ".join(f'"{w}"' for w in bad) +
+                        " (no pronouns, hedging, intensifiers or passive voice)")
+    for phrase, better in PREFERRED_WORDS.items():
+        if f" {phrase} " in low:
+            problems.append(f'write "{better}" instead of "{phrase}"')
+    return problems
+
+
+def check_sentences(text: str, p: Optional["Project"] = None, what: str = "text") -> List[str]:
+    """Problems with a claim, note or reason; empty when it follows the rules."""
+    cfg = dict(STYLE_DEFAULT)
+    if p is not None:
+        cfg.update(p.config.get("style") or {})
+    problems: List[str] = []
+    if not text or not text.strip():
+        return [f"{what} is empty"]
+    limit = int(cfg["max_sentence_words"])
+    for sentence in re.split(r"(?<=[.;!?])\s+", text.strip()):
+        n = len(_words(sentence))
+        if n > limit:
+            problems.append(f"a sentence has {n} words; keep each sentence to {limit} words: \"{sentence[:60]}...\""
+                            if len(sentence) > 60 else f"a sentence has {n} words; keep each sentence to {limit} words")
+    problems += _check_words(text)
+    return problems
+
+
+def style_enabled(p: Optional["Project"], override: Optional[bool] = None) -> bool:
+    if override is not None:
+        return override
+    if os.environ.get("WHATRAN_NO_STYLE"):
+        return False
+    cfg = dict(STYLE_DEFAULT)
+    if p is not None:
+        cfg.update(p.config.get("style") or {})
+    return bool(cfg.get("enabled", True))
+
+
+def enforce_style(p: Optional["Project"], *, label: Optional[str] = None, sentences: Optional[Dict[str, Optional[str]]] = None,
+                  enabled: Optional[bool] = None) -> None:
+    """Raise StyleError listing every problem, or return silently."""
+    if not style_enabled(p, enabled):
+        return
+    problems: List[str] = []
+    if label is not None:
+        problems += [f'label "{label}": {x}' for x in check_label(label, p)]
+    for what, text in (sentences or {}).items():
+        if text:
+            problems += [f"{what}: {x}" for x in check_sentences(text, p, what)]
+    if problems:
+        raise StyleError("the record does not follow the writing rules (short, verb-first, no hedging; "
+                         "--no-style or WHATRAN_NO_STYLE=1 to bypass):\n  - " + "\n  - ".join(problems))
+
+
+# --------------------------------------------------------------------------- #
+# bounded steps (begin / end): the language-neutral way to wrap code in a step
+# --------------------------------------------------------------------------- #
+
+def begin_step(p: Project, label: str, *, code: Optional[List[str]] = None, note: Optional[str] = None,
+               style: Optional[bool] = None) -> str:
+    enforce_style(p, label=label, sentences={"note": note}, enabled=style)
+    p.state_dir.mkdir(parents=True, exist_ok=True)
+    token = f"s-{int(time.time() * 1000):x}-{os.getpid():x}"
+    state = {
+        "label": label,
+        "started": time.time(),
+        "cwd": os.getcwd(),
+        "code": [p.rel(c) for c in (code or [])],
+        "note": note,
+        "snapshot": {k: list(v) for k, v in p.snapshot().items()},
+    }
+    (p.state_dir / f"step-{token}.json").write_text(json.dumps(state), encoding="utf-8")
+    return token
+
+
+def end_step(p: Project, token: str, *, inputs: Optional[List[str]] = None, outputs: Optional[List[str]] = None,
+             code: Optional[List[str]] = None, params: Optional[Dict[str, Any]] = None, note: Optional[str] = None,
+             status: str = "completed", supersedes: Optional[str] = None, style: Optional[bool] = None) -> Dict[str, Any]:
+    sf = p.state_dir / f"step-{token}.json"
+    if not sf.is_file():
+        raise AgError(f"no open step with token {token}")
+    state = json.loads(sf.read_text(encoding="utf-8"))
+    before = {k: (v[0], v[1]) for k, v in state["snapshot"].items()}
+    files, truncated = p.changed_since_snapshot(before)
+    ended = time.time()
+    note = note or state.get("note")
+    enforce_style(p, sentences={"note": note}, enabled=style)
+    ev = p.make_exec_event(None, source="step", exit_code=0 if status == "completed" else 1,
+                           started=state["started"], ended=ended, cwd=state.get("cwd"),
+                           files_changed=files, truncated=truncated)
+    ev["label"] = state["label"]
+    p.append(ev)
+    res = record_run(p, state["label"], inputs=inputs or [], outputs=outputs or [],
+                     code=code or state.get("code") or [], params=params or {}, command=None,
+                     evidence_mode=ev["id"], note=note, status=status, supersedes=supersedes, exec_event=ev,
+                     style=False)
+    try:
+        sf.unlink()
+    except OSError:
+        pass
+    return res
+
+
+# --------------------------------------------------------------------------- #
+# Python API:  import whatran as w
+#   w.record("Detect peaks")                 after a step that already ran
+#   with w.step("Fit model", params={...}):  around code
+#   @w.step("Normalize values", params=["method"])  on a function
+#   w.claim(...), w.reject(...), w.edit(...), w.remove(...), w.run(...)
+# --------------------------------------------------------------------------- #
+
+_API_ROOT: Optional[Path] = None
+
+
+def use(root: Optional[str] = None) -> Path:
+    """Point the API at a project (default: walk up from the current directory)."""
+    global _API_ROOT
+    r = find_root(root) if root else find_root()
+    if r is None:
+        raise AgError("no analysis/config.json found; call whatran.init() or run `whatran init` in the project")
+    _API_ROOT = r
+    return r
+
+
+def _project() -> Project:
+    root = _API_ROOT or find_root()
+    if root is None:
+        raise AgError("no analysis/config.json found; call whatran.init() or run `whatran init` in the project")
+    return Project(root)
+
+
+def _id(x: Any) -> str:
+    return getattr(x, "id", x)
+
+
+def init(root: Optional[str] = None, name: Optional[str] = None, description: Optional[str] = None) -> Path:
+    """Create analysis/ in root (default: cwd) and start recording there."""
+    ns = argparse.Namespace(root=root, name=name, description=description, no_copy=False, force=False)
+    with open(os.devnull, "w") as sink:
+        import contextlib
+        with contextlib.redirect_stdout(sink):
+            cmd_init(ns)
+    return use(root or os.getcwd())
+
+
+def record(label: str, *, inputs: Any = (), outputs: Any = (), code: Any = (), params: Optional[Dict[str, Any]] = None,
+           command: Optional[str] = None, evidence: str = "auto", note: Optional[str] = None,
+           supersedes: Any = None, infer: bool = True, style: Optional[bool] = None) -> str:
+    """Record a step that already ran (its command was captured by hooks or `run`). Returns the run id."""
+    p = _project()
+    res = record_run(p, label, inputs=list(_strs(inputs)), outputs=list(_strs(outputs)), code=list(_strs(code)),
+                     params=params or {}, command=command, evidence_mode=evidence, note=note, status="completed",
+                     supersedes=_id(supersedes) if supersedes else None, infer=infer, style=style)
+    return res["id"]
+
+
+def _strs(x: Any) -> List[str]:
+    if x is None:
+        return []
+    if isinstance(x, (str, os.PathLike)):
+        return [os.fspath(x)]
+    return [os.fspath(i) for i in x]
+
+
+class step:
+    """Bound a step around code: `with w.step("Fit model") as s:` or `@w.step("Fit model")`.
+
+    Files that change inside the block become the step's outputs; `inputs`, `code` and
+    `params` can be given, and the calling script is taken as the code when inside the
+    project. As a decorator, `params` may list argument names to capture, or be True
+    for every simple argument.
+    """
+
+    def __init__(self, label: str, *, params: Any = None, inputs: Any = (), outputs: Any = (), code: Any = None,
+                 note: Optional[str] = None, supersedes: Any = None, style: Optional[bool] = None):
+        self.label = label
+        self.params = params
+        self.inputs = list(_strs(inputs))
+        self.outputs = list(_strs(outputs))
+        self.code = None if code is None else list(_strs(code))
+        self.note = note
+        self.supersedes = _id(supersedes) if supersedes else None
+        self.style = style
+        self.id: Optional[str] = None
+        self.result: Optional[Dict[str, Any]] = None
+        self._token: Optional[str] = None
+        self._p: Optional[Project] = None
+
+    def _caller_code(self, depth: int = 2) -> List[str]:
+        import inspect
+        try:
+            frame = inspect.stack()[depth].frame
+            f = frame.f_code.co_filename
+        except Exception:
+            return []
+        if not f or f.startswith("<") or "ipykernel" in f:
+            return []
+        p = self._p or _project()
+        rel = p.rel(f)
+        return [rel] if not rel.startswith("/") and p.abs(rel).is_file() else []
+
+    def __enter__(self) -> "step":
+        self._p = _project()
+        code = self.code if self.code is not None else self._caller_code()
+        self._token = begin_step(self._p, self.label, code=code, note=self.note, style=self.style)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        params = self.params if isinstance(self.params, dict) else {}
+        self.result = end_step(self._p, self._token, inputs=self.inputs, outputs=self.outputs,
+                               params=params, status="failed" if exc_type else "completed",
+                               supersedes=self.supersedes, style=self.style)
+        self.id = self.result["id"]
+        return False
+
+    def __call__(self, fn):
+        import functools
+        import inspect
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            bound = sig.bind_partial(*args, **kwargs)
+            bound.apply_defaults()
+            captured: Dict[str, Any] = {}
+            if isinstance(self.params, dict):
+                captured = dict(self.params)
+            else:
+                names = list(self.params) if isinstance(self.params, (list, tuple, set)) else (
+                    list(bound.arguments) if self.params is True else [])
+                for n in names:
+                    v = bound.arguments.get(n)
+                    if isinstance(v, (int, float, str, bool)) or v is None:
+                        captured[n] = v
+            inner = step(self.label, params=captured, inputs=self.inputs, outputs=self.outputs,
+                         code=self.code if self.code is not None else self._fn_code(fn), note=self.note,
+                         supersedes=self.supersedes, style=self.style)
+            with inner:
+                out = fn(*args, **kwargs)
+            wrapper.last_step = inner  # type: ignore[attr-defined]
+            return out
+        wrapper.last_step = None  # type: ignore[attr-defined]
+        return wrapper
+
+    @staticmethod
+    def _fn_code(fn) -> List[str]:
+        try:
+            f = fn.__code__.co_filename
+        except AttributeError:
+            return []
+        if not f or f.startswith("<") or "ipykernel" in f:
+            return []
+        p = _project()
+        rel = p.rel(f)
+        return [rel] if not rel.startswith("/") and p.abs(rel).is_file() else []
+
+
+def claim(text: str, supports: Any = (), note: Optional[str] = None, style: Optional[bool] = None) -> str:
+    """Record a finding and what it rests on (run ids, Step objects, or output paths). Returns the claim id."""
+    p = _project()
+    sup = [str(_id(s)) for s in (supports if not isinstance(supports, (str, os.PathLike)) and supports is not None else [supports])]
+    sup = [s for s in sup if s and s != "None"]
+    res = record_claim(p, text, sup, "tentative", note, style=style)
+    return res["id"]
+
+
+def reject(node: Any, reason: str, style: Optional[bool] = None) -> None:
+    """Abandon a run or claim with a reason. It stays in the record, hidden from the result path."""
+    p = _project()
+    enforce_style(p, sentences={"reason": reason}, enabled=style)
+    nodes = fold_nodes(p.events())
+    nid = _id(node)
+    if nid not in nodes:
+        raise AgError(f"unknown node {nid}")
+    p.append({"event": "status", "id": nid, "status": "rejected", "reason": reason})
+
+
+def edit(node: Any, *, label: Optional[str] = None, note: Optional[str] = None, params: Optional[Dict[str, Any]] = None,
+         status: Optional[str] = None, style: Optional[bool] = None) -> None:
+    """Amend a record. The previous values stay in the ledger; the graph shows the latest."""
+    p = _project()
+    nodes = fold_nodes(p.events())
+    nid = _id(node)
+    if nid not in nodes:
+        raise AgError(f"unknown node {nid}")
+    n = nodes[nid]
+    enforce_style(p, label=label if (label is not None and n.get("type") == "run") else None,
+                  sentences={"note": note, "label": label if (label is not None and n.get("type") == "claim") else None},
+                  enabled=style)
+    fields: Dict[str, Any] = {}
+    if label is not None:
+        fields["label"] = label
+    if note is not None:
+        fields["note"] = note
+    if params:
+        merged = dict(n.get("params") or {})
+        merged.update(params)
+        fields["params"] = merged
+    if status is not None:
+        fields["status"] = status
+    if not fields:
+        raise AgError("nothing to edit")
+    p.append({"event": "update", "id": nid, "fields": fields})
+
+
+def remove(node: Any, reason: Optional[str] = None) -> None:
+    """Retract a record from the graph. The ledger keeps it, marked retracted, for audit."""
+    p = _project()
+    nodes = fold_nodes(p.events())
+    nid = _id(node)
+    if nid not in nodes:
+        raise AgError(f"unknown node {nid}")
+    ev: Dict[str, Any] = {"event": "retract", "id": nid}
+    if reason:
+        ev["reason"] = reason
+    p.append(ev)
+
+
+def run(command: Any, label: Optional[str] = None, **kw: Any) -> int:
+    """Run a shell command (string or argv list), capture its evidence, optionally record it as a step."""
+    argv = ["run"]
+    if label:
+        argv += ["--label", label]
+    for k in ("inputs", "outputs", "code"):
+        for v in _strs(kw.get(k)):
+            argv += [{"inputs": "--in", "outputs": "--out", "code": "--code"}[k], v]
+    for k, v in (kw.get("params") or {}).items():
+        argv += ["--param", f"{k}={json.dumps(v) if isinstance(v, (list, dict)) else v}"]
+    if kw.get("note"):
+        argv += ["--note", kw["note"]]
+    if kw.get("supersedes"):
+        argv += ["--supersedes", _id(kw["supersedes"])]
+    argv.append("--")
+    argv += [command] if isinstance(command, str) else [shlex.join([os.fspath(c) for c in command])]
+    root = _API_ROOT or find_root()
+    if root is not None:
+        argv = ["--root", str(root)] + argv
+    return main(argv)
+
+
+
 # --------------------------------------------------------------------------- #
 # command-line commands
 # --------------------------------------------------------------------------- #
@@ -1477,6 +2432,14 @@ def plugin_viewer_path() -> Optional[Path]:
     return None
 
 
+def write_viewer(dst: Path) -> None:
+    """Copy the viewer next to the graph: from the plugin tree when present, else the embedded copy."""
+    src = plugin_viewer_path()
+    if src is not None and src.resolve() == dst.resolve():
+        return
+    dst.write_text(src.read_text(encoding="utf-8") if src else VIEWER_HTML, encoding="utf-8")
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     root = Path(args.root or os.getcwd()).resolve()
     ag_dir = root / AG_DIRNAME
@@ -1490,6 +2453,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "watch": ["."],
         "exclude": DEFAULT_CONFIG["exclude"],
         "observe": {"enabled": True, "nudge": True},
+        "style": {"enabled": True, "verbs": []},
     }
     (ag_dir / CONFIG_NAME).write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     (ag_dir / EVENTS_NAME).touch()
@@ -1503,14 +2467,12 @@ def cmd_init(args: argparse.Namespace) -> int:
             shutil.copyfile(src, dst)
             dst.chmod(0o755)
         copied.append(dst)
-        viewer = plugin_viewer_path()
-        if viewer and viewer.resolve() != (ag_dir / VIEWER_NAME).resolve():
-            shutil.copyfile(viewer, ag_dir / VIEWER_NAME)
-            copied.append(ag_dir / VIEWER_NAME)
+        write_viewer(ag_dir / VIEWER_NAME)
+        copied.append(ag_dir / VIEWER_NAME)
     print(f"initialised {ag_dir}")
     for c in copied:
         print(f"  copied {c.relative_to(root)}")
-    print("recording is on. after each meaningful step: python3 analysis/whatran.py record \"<what it did>\"")
+    print("recording is on. after each meaningful step: python3 analysis/whatran.py record \"<Verb> <object>\"  e.g. \"Detect peaks\"")
     print("(outside Claude Code, run steps as: python3 analysis/whatran.py run -- CMD). finish with: done")
     return 0
 
@@ -1546,7 +2508,8 @@ def cmd_record(args: argparse.Namespace) -> int:
     res = record_run(p, args.label, inputs=args.inputs or [], outputs=args.outputs or [],
                      code=args.code or [], params=_params_from_args(args), command=args.cmd,
                      evidence_mode=args.evidence, note=args.note, status=args.status,
-                     supersedes=args.supersedes, node_id=args.id, infer=not args.no_infer)
+                     supersedes=args.supersedes, node_id=args.id, infer=not args.no_infer,
+                     style=False if args.no_style else None)
     if args.json:
         print(json.dumps(res, ensure_ascii=False))
         return 0
@@ -1577,7 +2540,8 @@ def cmd_artifact(args: argparse.Namespace) -> int:
 
 def cmd_claim(args: argparse.Namespace) -> int:
     p = require_project(args)
-    res = record_claim(p, args.text, args.supports or [], args.status, args.note, node_id=args.id)
+    res = record_claim(p, args.text, args.supports or [], args.status, args.note, node_id=args.id,
+                       style=False if args.no_style else None)
     how = " (the last completed run; pass --supports to change)" if res.get("auto_supports") else ""
     _print_result(res, args.json, f"recorded {res['id']}  supported by {', '.join(res['supported_by']) or 'nothing'}{how}")
     return 0
@@ -1598,6 +2562,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not cmd:
         raise AgError("nothing to run: whatran.py run [options] -- COMMAND ...")
     cmd_str = cmd[0] if len(cmd) == 1 else shlex.join(cmd)
+    if args.label:
+        enforce_style(p, label=args.label, sentences={"note": args.note}, enabled=False if args.no_style else None)
     events = p.events()
     before = p.snapshot()
     started = time.time()
@@ -1622,7 +2588,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         res = record_run(p, args.label, inputs=args.inputs or [], outputs=args.outputs or [],
                          code=args.code or [], params=_params_from_args(args), command=cmd_str,
                          evidence_mode=ev["id"], note=args.note, status=status, supersedes=args.supersedes,
-                         exec_event=ev)
+                         exec_event=ev, style=False if args.no_style else None)
         print(f"whatran: recorded {res['id']} [{status}; observed via {ev['id']}]", file=sys.stderr)
         for w in res["warnings"]:
             print(f"whatran:   warning: {w}", file=sys.stderr)
@@ -1638,6 +2604,7 @@ def cmd_reject(args: argparse.Namespace) -> int:
         raise AgError(f"unknown node {args.id}")
     if nodes[args.id].get("type") == "artifact":
         raise AgError("artifacts cannot be rejected; reject the run that produced them")
+    enforce_style(p, sentences={"reason": args.reason}, enabled=False if args.no_style else None)
     p.append({"event": "status", "id": args.id, "status": "rejected", "reason": args.reason})
     print(f"{args.id} marked rejected (kept in the record): {args.reason}")
     return 0
@@ -1649,12 +2616,15 @@ def cmd_update(args: argparse.Namespace) -> int:
     if args.id not in nodes:
         raise AgError(f"unknown node {args.id}")
     fields: Dict[str, Any] = {}
+    t = nodes[args.id].get("type")
+    enforce_style(p, label=args.label if (args.label and t == "run") else None,
+                  sentences={"note": args.note, "label": args.label if (args.label and t == "claim") else None},
+                  enabled=False if args.no_style else None)
     if args.label:
         fields["label"] = args.label
     if args.note:
         fields["note"] = args.note
     if args.status:
-        t = nodes[args.id].get("type")
         allowed = RUN_STATUSES if t == "run" else CLAIM_STATUSES if t == "claim" else ()
         if args.status not in allowed:
             raise AgError(f"status {args.status!r} not allowed for {t}; choose from {', '.join(allowed) or 'nothing'}")
@@ -1669,6 +2639,40 @@ def cmd_update(args: argparse.Namespace) -> int:
         raise AgError("nothing to update")
     p.append({"event": "update", "id": args.id, "fields": fields})
     print(f"updated {args.id}: {', '.join(fields)}")
+    return 0
+
+
+def cmd_begin(args: argparse.Namespace) -> int:
+    p = require_project(args)
+    token = begin_step(p, args.label, code=args.code or [], note=args.note, style=False if args.no_style else None)
+    print(token)
+    return 0
+
+
+def cmd_end(args: argparse.Namespace) -> int:
+    p = require_project(args)
+    res = end_step(p, args.token, inputs=args.inputs or [], outputs=args.outputs or [], code=args.code or [],
+                   params=_params_from_args(args), note=args.note, status=args.status, supersedes=args.supersedes,
+                   style=False if args.no_style else None)
+    if args.json:
+        print(json.dumps(res, ensure_ascii=False))
+    else:
+        print(f"recorded {res['id']}  [{res['status']}; outputs {len(res['outputs'])}]")
+        for w in res["warnings"]:
+            print(f"  warning: {w}")
+    return 0
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    p = require_project(args)
+    nodes = fold_nodes(p.events())
+    if args.id not in nodes:
+        raise AgError(f"unknown node {args.id}")
+    ev: Dict[str, Any] = {"event": "retract", "id": args.id}
+    if args.reason:
+        ev["reason"] = args.reason
+    p.append(ev)
+    print(f"{args.id} retracted from the graph (the ledger keeps it)")
     return 0
 
 
@@ -1997,10 +3001,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
     write_graph(p, graph)
     dest = (p.root / args.dest).resolve()
     dest.mkdir(parents=True, exist_ok=True)
-    viewer = plugin_viewer_path()
-    if viewer is None:
-        raise AgError("viewer index.html not found next to whatran.py or in the plugin's viewer/ directory")
-    shutil.copyfile(viewer, dest / VIEWER_NAME)
+    write_viewer(dest / VIEWER_NAME)
     shutil.copyfile(p.graph_path, dest / GRAPH_NAME)
     rel_dest = dest.relative_to(p.root).as_posix()
     pages_path = rel_dest[len("docs/"):] if rel_dest.startswith("docs/") else rel_dest
@@ -2017,9 +3018,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if not p.graph_path.is_file():
         write_graph(p, build_graph(p, verify=True))
     if not (p.ag_dir / VIEWER_NAME).is_file():
-        viewer = plugin_viewer_path()
-        if viewer:
-            shutil.copyfile(viewer, p.ag_dir / VIEWER_NAME)
+        write_viewer(p.ag_dir / VIEWER_NAME)
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(p.ag_dir))
     with http.server.ThreadingHTTPServer(("127.0.0.1", args.port), handler) as httpd:
         print(f"serving {p.ag_dir} at http://127.0.0.1:{args.port}/  (Ctrl-C to stop)")
@@ -2042,6 +3041,8 @@ def cmd_open(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 MORE_HELP = """more commands (each has -h):
+  begin LABEL / end TOKEN   wrap any code in a step from any language (what the R and Python APIs use)
+  remove ID             retract a record from the graph (the ledger keeps it)
   artifact PATH         declare an input file with its origin
   update ID             amend a node's label, note, status or params
   log [N]               recent captured executions and whether they are linked
@@ -2061,6 +3062,7 @@ def _add_step_flags(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--params-json", metavar="JSON", help=argparse.SUPPRESS)
     sp.add_argument("--supersedes", metavar="RUN_ID", help="this run replaces an earlier one (kept, marked superseded)")
     sp.add_argument("--note")
+    sp.add_argument("--no-style", action="store_true", help="skip the writing rules for this record")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2081,7 +3083,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_init)
 
     rr = sub.add_parser("record", help='after a meaningful step: record "what it did" (details read from the captured command)')
-    rr.add_argument("label", help='what the step did, e.g. "Peak detection"')
+    rr.add_argument("label", help='what the step did, verb first, e.g. "Detect peaks"')
     _add_step_flags(rr)
     rr.add_argument("--evidence", default="auto", metavar="x-NNNN|last|none",
                     help="which captured execution (default: the latest unlinked one that changed files)")
@@ -2097,6 +3099,7 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--supports", action="append", metavar="ID|PATH", help="run id or output file it rests on (repeatable)")
     rc.add_argument("--status", default="tentative", choices=CLAIM_STATUSES, help=hidden)
     rc.add_argument("--note")
+    rc.add_argument("--no-style", action="store_true", help="skip the writing rules for this record")
     rc.add_argument("--id", help=hidden)
     rc.add_argument("--json", action="store_true", help=hidden)
     rc.set_defaults(func=cmd_claim)
@@ -2104,6 +3107,7 @@ def build_parser() -> argparse.ArgumentParser:
     j = sub.add_parser("reject", help="abandon a run or claim with a reason (it stays in the record)")
     j.add_argument("id")
     j.add_argument("--reason", required=True)
+    j.add_argument("--no-style", action="store_true", help=hidden)
     j.set_defaults(func=cmd_reject)
 
     d = sub.add_parser("done", help="compile the graph, check recorded files, draft the package, say what is next")
@@ -2142,7 +3146,27 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--note")
     u.add_argument("--status")
     u.add_argument("--param", action="append", metavar="KEY=VALUE")
+    u.add_argument("--no-style", action="store_true")
     u.set_defaults(func=cmd_update)
+
+    rm = sub.add_parser("remove")
+    rm.add_argument("id")
+    rm.add_argument("--reason")
+    rm.set_defaults(func=cmd_remove)
+
+    bg = sub.add_parser("begin")
+    bg.add_argument("label")
+    bg.add_argument("--code", action="append", metavar="PATH")
+    bg.add_argument("--note")
+    bg.add_argument("--no-style", action="store_true")
+    bg.set_defaults(func=cmd_begin)
+
+    en = sub.add_parser("end")
+    en.add_argument("token")
+    _add_step_flags(en)
+    en.add_argument("--status", default="completed", choices=RUN_STATUSES)
+    en.add_argument("--json", action="store_true")
+    en.set_defaults(func=cmd_end)
 
     lg = sub.add_parser("log")
     lg.add_argument("n", nargs="?", type=int, default=15)

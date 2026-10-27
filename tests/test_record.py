@@ -94,7 +94,7 @@ class TestRecord(Base):
         self.assertEqual(nodes[r3["id"]]["version"], 2)
 
     def test_missing_input_is_an_error(self):
-        code, _, err = run_ag(["record", "x", "--in", "data/nope.csv"], self.root)
+        code, _, err = run_ag(["record", "Scale values", "--in", "data/nope.csv"], self.root)
         self.assertEqual(code, 2)
         self.assertIn("does not exist", err)
 
@@ -139,7 +139,7 @@ class TestRecord(Base):
                          [["results/a.csv"], [], ["results/b.csv"]])
 
     def test_run_wrapper_failure_marks_failed(self):
-        code, _, _ = run_ag(["run", "--label", "Boom", "--", f"{sys.executable} -c 'import sys; sys.exit(3)'"], self.root)
+        code, _, _ = run_ag(["run", "--label", "Run failing command", "--", f"{sys.executable} -c 'import sys; sys.exit(3)'"], self.root)
         self.assertEqual(code, 3)
         run = [n for n in ag.fold_nodes(self.p.events()).values() if n["type"] == "run"][0]
         self.assertEqual(run["status"], "failed")
@@ -186,7 +186,7 @@ class TestCompile(Base):
         run_ag(["run", "--label", "Scale x10", "--in", "results/a.csv", "--out", "results/c.csv",
                 "--code", "scripts/step.py", "--param", "k=10", "--",
                 f"{py} scripts/step.py results/a.csv results/c.csv 10"], self.root)
-        run_ag(["reject", "run-scale-x3-1", "--reason", "x3 was a dead end"], self.root)
+        run_ag(["reject", "run-scale-x3-1", "--reason", "x3 is a dead end"], self.root)
         run_ag(["claim", "x20 overall", "--supports", "run-scale-x10-1"], self.root)
         # an unlinked execution with no scientific meaning
         run_ag(["run", "--", "echo debugging > results/scratch.txt"], self.root)
@@ -206,7 +206,7 @@ class TestCompile(Base):
         self.assertNotIn("run-scale-x3-1", main)
         nodes = {n["id"]: n for n in g["nodes"]}
         self.assertEqual(nodes["run-scale-x3-1"]["status"], "rejected")
-        self.assertEqual(nodes["run-scale-x3-1"]["status_reason"], "x3 was a dead end")
+        self.assertEqual(nodes["run-scale-x3-1"]["status_reason"], "x3 is a dead end")
         b = [n for n in g["nodes"] if n["type"] == "artifact" and n["path"] == "results/b.csv"][0]
         self.assertFalse(b["on_main_path"])
         self.assertEqual(g["summary"]["runs"]["rejected"], 1)
@@ -409,7 +409,7 @@ class TestSimpleFlow(Base):
         self.assertTrue(node["verified_by_replay"])
 
     def test_record_with_nothing_captured_is_declared(self):
-        code, out, _ = run_ag(["record", "Imagined step", "--json"], self.root)
+        code, out, _ = run_ag(["record", "Scale from memory", "--json"], self.root)
         self.assertEqual(code, 0)
         res = json.loads(out)
         self.assertEqual(res["evidence"], "declared")
@@ -438,8 +438,8 @@ class TestSimpleFlow(Base):
     def _two_step_analysis(self):
         py = sys.executable
         run_ag(["run", "--label", "Scale x2", "--", f"{py} scripts/flagstep.py --src data/raw.csv --dst results/a.csv --k 2"], self.root)
-        run_ag(["run", "--label", "Dead end", "--", f"{py} scripts/flagstep.py --src data/raw.csv --dst results/dead.csv --k 9"], self.root)
-        run_ag(["reject", "run-dead-end-1", "--reason", "not needed"], self.root)
+        run_ag(["run", "--label", "Scale by nine", "--", f"{py} scripts/flagstep.py --src data/raw.csv --dst results/dead.csv --k 9"], self.root)
+        run_ag(["reject", "run-scale-by-nine-1", "--reason", "not needed"], self.root)
         run_ag(["run", "--label", "Scale x10", "--", f"{py} scripts/flagstep.py --src results/a.csv --dst results/c.csv --k 10"], self.root)
         run_ag(["claim", "x20 overall"], self.root)
 
@@ -475,7 +475,7 @@ class TestSimpleFlow(Base):
         nodes = {n["id"]: n for n in g["nodes"]}
         self.assertTrue(nodes["run-scale-x2-1"]["verified_by_replay"])
         self.assertTrue(nodes["run-scale-x10-1"]["verified_by_replay"])
-        self.assertFalse(nodes["run-dead-end-1"]["verified_by_replay"])
+        self.assertFalse(nodes["run-scale-by-nine-1"]["verified_by_replay"])
         self.assertEqual(g["summary"]["runs"]["replay_verified"], 2)
         # a changed method no longer matches: check fails and the references come back untouched
         (self.root / "scripts" / "flagstep.py").write_text((self.root / "scripts" / "flagstep.py").read_text().replace("v * a.k", "v * a.k + 1"))
@@ -498,6 +498,7 @@ class TestEmbeddedAssets(unittest.TestCase):
         self.assertEqual(ag.CHECK_PY, (assets / "check.py").read_text())
         self.assertEqual(ag.REPRODUCE_YML, (assets / "reproduce.yml").read_text())
         self.assertEqual(ag.BUILD_SITE_PY, (assets / "build_site_from_graph.py").read_text())
+        self.assertEqual(ag.VIEWER_HTML, (ROOT / "plugins/whatran/viewer/index.html").read_text())
 
     def test_help_lists_the_everyday_commands_only(self):
         parser = ag.build_parser()
@@ -506,6 +507,171 @@ class TestEmbeddedAssets(unittest.TestCase):
             self.assertIn(f"  {cmd} ", text)
         self.assertIn("more commands", text)
         self.assertNotIn("\n    replay-verified", text)   # hidden from the command list, present in the epilog
+
+
+class TestStyle(Base):
+    """Labels are verb-first and short; claims, notes and reasons are short, plain sentences."""
+
+    def test_label_rules(self):
+        self.assertEqual(ag.check_label("Detect peaks"), [])
+        self.assertEqual(ag.check_label("Compare groups with Welch t-test"), [])
+        probs = ag.check_label("Peak detection")
+        self.assertTrue(any("start with an approved verb" in x and "Detect peaks" in x for x in probs), probs)
+        self.assertTrue(any("10 words" in x for x in ag.check_label("Fit a model to the data with ten words here")))
+        self.assertTrue(any("avoid" in x for x in ag.check_label("Fit the model we built")))
+        self.assertTrue(any("full stop" in x for x in ag.check_label("Fit model.")))
+
+    def test_sentence_rules(self):
+        self.assertEqual(ag.check_sentences("Feature at m/z 301.1 is higher in group B (Welch p < 0.05)"), [])
+        self.assertTrue(any('"was"' in x for x in ag.check_sentences("The peak was detected")))
+        self.assertTrue(any("21 words" in x for x in ag.check_sentences(" ".join(["word"] * 21))))
+        self.assertTrue(any('"do" instead of "perform"' in x for x in ag.check_sentences("Perform the test")))
+
+    def test_cli_enforces_and_no_style_bypasses(self):
+        code, _, err = run_ag(["record", "Peak detection"], self.root)
+        self.assertEqual(code, 2)
+        self.assertIn("writing rules", err)
+        self.assertIn("Detect peaks", err)
+        code, _, err = run_ag(["record", "Peak detection", "--no-style"], self.root)
+        self.assertEqual(code, 0, err)
+        code, _, err = run_ag(["claim", "We think it is probably higher"], self.root)
+        self.assertEqual(code, 2)
+        code, _, err = run_ag(["reject", "run-peak-detection-1", "--reason", "It was perhaps wrong"], self.root)
+        self.assertEqual(code, 2)
+        code, _, err = run_ag(["reject", "run-peak-detection-1", "--reason", "Threshold calls noise as peaks"], self.root)
+        self.assertEqual(code, 0, err)
+
+    def test_project_can_extend_replace_or_disable_the_verbs(self):
+        cfg = json.loads(self.p.config_path.read_text())
+        cfg["style"] = {"verbs": ["deconvolve"]}
+        self.p.config_path.write_text(json.dumps(cfg))
+        code, _, err = run_ag(["record", "Deconvolve spectra"], self.root)
+        self.assertEqual(code, 0, err)
+        (self.root / "verbs.txt").write_text("frobnicate\n")
+        cfg["style"] = {"verbs_file": "verbs.txt"}
+        self.p.config_path.write_text(json.dumps(cfg))
+        code, _, _ = run_ag(["record", "Frobnicate data"], self.root)
+        self.assertEqual(code, 0)
+        code, _, _ = run_ag(["record", "Detect peaks"], self.root)
+        self.assertEqual(code, 2)                      # the file replaces the built-in list
+        cfg["style"] = {"enabled": False}
+        self.p.config_path.write_text(json.dumps(cfg))
+        code, _, _ = run_ag(["record", "Peak detection"], self.root)
+        self.assertEqual(code, 0)
+
+
+class TestAPI(Base):
+    """import whatran as w: record, step (context + decorator), claim, edit, remove, run."""
+
+    def setUp(self):
+        super().setUp()
+        self.old = os.getcwd()
+        os.chdir(self.root)
+        ag.use(str(self.root))
+
+    def tearDown(self):
+        os.chdir(self.old)
+        ag._API_ROOT = None
+        super().tearDown()
+
+    def test_step_context_records_changed_files(self):
+        with ag.step("Scale values", params={"k": 2}, inputs=["data/raw.csv"]) as s:
+            vals = [float(l) for l in open("data/raw.csv").read().split()[1:]]
+            open("results/a.csv", "w").write("x\n" + "\n".join(str(v * 2) for v in vals) + "\n")
+        self.assertTrue(s.id.startswith("run-scale-values"))
+        nodes = ag.fold_nodes(self.p.events())
+        node = nodes[s.id]
+        self.assertEqual(node["evidence"]["level"], "observed")
+        self.assertEqual(node["evidence"]["source"], "step")
+        self.assertEqual(node["params"], {"k": 2})
+        self.assertEqual([nodes[o]["path"] for o in node["outputs"]], ["results/a.csv"])
+        self.assertEqual([nodes[i]["path"] for i in node["inputs"]], ["data/raw.csv"])
+        self.assertEqual(node["code"], [])             # the test runner lives outside the project
+
+    def test_step_failure_is_recorded_as_failed(self):
+        with self.assertRaises(ValueError):
+            with ag.step("Scale values") as s:
+                raise ValueError("boom")
+        self.assertEqual(ag.fold_nodes(self.p.events())[s.id]["status"], "failed")
+
+    def test_decorator_captures_named_params_and_the_script(self):
+        script = self.root / "scripts" / "pipeline.py"
+        script.write_text(
+            "import whatran as w\n"
+            "@w.step('Scale values', params=['k'])\n"
+            "def scale(src, dst, k=3):\n"
+            "    vals = [float(l) for l in open(src).read().split()[1:]]\n"
+            "    open(dst, 'w').write('x\\n' + '\\n'.join(str(v * k) for v in vals) + '\\n')\n"
+            "scale('data/raw.csv', 'results/b.csv', k=4)\n"
+            "print(scale.last_step.id)\n")
+        env = dict(os.environ, PYTHONPATH=str(ROOT / "plugins/whatran/bin"))
+        r = subprocess.run([sys.executable, str(script)], cwd=self.root, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        node = ag.fold_nodes(self.p.events())[r.stdout.strip()]
+        self.assertEqual(node["params"], {"k": 4})
+        self.assertEqual([c["path"] for c in node["code"]], ["scripts/pipeline.py"])
+
+    def test_record_claim_edit_remove_and_style(self):
+        ag.run(f"{sys.executable} scripts/flagstep.py --src data/raw.csv --dst results/b.csv --k 3")
+        rid = ag.record("Scale by three")
+        cid = ag.claim("Values tripled", supports=[rid])
+        ag.edit(rid, label="Scale values by three", params={"method": "flag"})
+        node = ag.fold_nodes(self.p.events())[rid]
+        self.assertEqual(node["label"], "Scale values by three")
+        self.assertEqual(node["params"], {"k": 3, "method": "flag"})
+        ag.remove(cid, reason="duplicate")
+        nodes = ag.fold_nodes(self.p.events())
+        self.assertNotIn(cid, nodes)
+        self.assertIn(rid, nodes)
+        self.assertEqual(sum(1 for e in self.p.events() if e.get("event") == "retract"), 1)
+        self.assertEqual(ag.build_graph(self.p)["summary"]["retracted"], 1)
+        with self.assertRaises(ag.StyleError):
+            ag.record("Peak detection")
+        with self.assertRaises(ag.StyleError):
+            ag.claim("We think so")
+        ag.record("Peak detection", style=False)
+
+
+class TestBeginEnd(Base):
+    def test_begin_end_from_the_shell(self):
+        code, out, err = run_ag(["begin", "Scale values", "--code", "scripts/step.py"], self.root)
+        self.assertEqual(code, 0, err)
+        token = out.strip()
+        subprocess.run([sys.executable, "scripts/step.py", "data/raw.csv", "results/a.csv", "2"],
+                       cwd=self.root, check=True, capture_output=True)
+        code, out, err = run_ag(["end", token, "--param", "k=2", "--in", "data/raw.csv", "--json"], self.root)
+        self.assertEqual(code, 0, err)
+        res = json.loads(out)
+        self.assertEqual(res["paths"], {"inputs": ["data/raw.csv"], "outputs": ["results/a.csv"], "code": ["scripts/step.py"]})
+        self.assertFalse(list(self.p.state_dir.glob("step-*.json")))
+        code, _, _ = run_ag(["end", token], self.root)
+        self.assertEqual(code, 2)
+        code, _, err = run_ag(["begin", "Peak detection"], self.root)
+        self.assertEqual(code, 2)
+
+
+@unittest.skipUnless(shutil.which("Rscript"), "Rscript not installed")
+class TestRShim(Base):
+    def test_r_step_and_claim(self):
+        rfile = ROOT / "r" / "whatran" / "R" / "whatran.R"
+        script = self.root / "analysis_r.R"
+        script.write_text(
+            f'source("{rfile}")\n'
+            'id <- whatran_step("Scale values", {\n'
+            '  v <- as.numeric(readLines("data/raw.csv")[-1])\n'
+            '  writeLines(c("x", v * 2), "results/r.csv")\n'
+            '}, params = list(k = 2), inputs = "data/raw.csv")\n'
+            'cid <- whatran_claim("Values doubled", supports = id)\n'
+            'cat(id, cid, sep = "\\n")\n')
+        env = dict(os.environ, WHATRAN_CLI=f"{sys.executable} {ROOT / 'plugins/whatran/bin/whatran.py'}")
+        r = subprocess.run(["Rscript", str(script)], cwd=self.root, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        rid, cid = r.stdout.strip().splitlines()[-2:]
+        nodes = ag.fold_nodes(self.p.events())
+        self.assertEqual(nodes[rid]["params"], {"k": 2})
+        self.assertEqual(nodes[cid]["supported_by"], [rid])
+        self.assertEqual([nodes[o]["path"] for o in nodes[rid]["outputs"]], ["results/r.csv"])
+        self.assertEqual([nodes[i]["path"] for i in nodes[rid]["inputs"]], ["data/raw.csv"])
 
 
 if __name__ == "__main__":
