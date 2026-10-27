@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whatran"
+version = "0.3.0"
+description = "What ran? Record an agent's scientific analysis as a checkable graph, then package the result path so it reruns."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Junhao Qiu" }]
+keywords = ["provenance", "reproducibility", "scientific-analysis", "agents"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://qchiujunhao.github.io/whatran/"
+Repository = "https://github.com/qchiujunhao/whatran"
+
+[project.scripts]
+whatran = "whatran:main"
+
+[tool.setuptools]
+py-modules = ["whatran"]
+
+[tool.setuptools.package-dir]
+"" = "plugins/whatran/bin"

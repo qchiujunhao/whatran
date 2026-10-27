@@ -11,3 +11,8 @@ examples/*/site/
 # Recorder state (per-session scratch)
 examples/*/analysis/.state/
 analysis/.state/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
