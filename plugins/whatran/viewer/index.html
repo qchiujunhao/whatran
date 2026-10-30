@@ -364,6 +364,7 @@ footer b { color: var(--ink); font-weight: 600; }
     const chips = [];
     if (n.status) chips.push(`<span class="chip ${n.status === 'rejected' || n.status === 'failed' ? 'warn' : ''}">${esc(n.status)}</span>`);
     if (n.type === 'run') { const lvl = (n.evidence && n.evidence.level) || 'declared'; chips.push(`<span class="chip ${lvl === 'observed' ? 'ok' : 'warn'}">${lvl === 'observed' ? 'execution observed' : 'declared only'}</span>`); chips.push(`<span class="chip ${n.verified_by_replay ? 'ok' : ''}">${n.verified_by_replay ? 'replay verified' : 'not replay-verified'}</span>`); }
+    if (n.type === 'run' && n.auto) chips.push(`<span class="chip">auto-recorded · label from the ${esc(n.auto.label_from || 'command')}</span>`);
     if (n.type === 'artifact') chips.push(`<span class="chip ${n.integrity === 'intact' ? 'ok' : n.integrity === 'missing' ? 'bad' : n.integrity === 'modified' ? 'warn' : ''}">${esc(n.integrity || 'unchecked')}</span>`);
     if (!state.graph.main_path.includes(n.id)) chips.push(`<span class="chip">not on the result path</span>`);
     parts.push(`<div class="chips" style="margin-top:8px">${chips.join('')}</div>`);
@@ -371,6 +372,7 @@ footer b { color: var(--ink); font-weight: 600; }
     if (n.note) parts.push(`<p style="margin:10px 0 0">${esc(n.note)}</p>`);
 
     if (n.type === 'run') {
+      if (n.description || n.intent) parts.push(`<h3>What the agent said</h3>${n.description ? `<p style="margin:6px 0 0">${esc(n.description)}</p>` : ''}${n.intent ? `<p style="margin:6px 0 0;color:var(--muted)">${esc(n.intent)}</p>` : ''}`);
       if (n.command) parts.push(`<h3>Command</h3><pre>${esc(n.command)}</pre>`);
       const params = Object.entries(n.params || {});
       if (params.length) parts.push(`<h3>Parameters</h3><table>${params.map(([k, v]) => row(k, `<code>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</code>`)).join('')}</table>`);
@@ -417,6 +419,7 @@ footer b { color: var(--ink); font-weight: 600; }
     L.push(`# Analysis Graph node: ${n.label || n.id} (${n.id})`);
     L.push(`type: ${n.type}${n.status ? '  status: ' + n.status : ''}`);
     if (n.type === 'run') {
+      if (n.description) L.push(`agent said: ${n.description}`);
       if (n.command) L.push(`command: ${n.command}`);
       (n.code || []).forEach((c) => L.push(`code: ${c.path} (sha256 ${short(c.sha256)})`));
       const p = fmtParams(n.params); if (p) L.push(`params: ${p}`);

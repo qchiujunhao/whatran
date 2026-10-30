@@ -1,5 +1,5 @@
 {
-  "description": "Whatran: load the completion rule at session start; record execution evidence for every Bash command inside a project that has analysis/config.json (nothing happens elsewhere).",
+  "description": "Whatran: load the completion rule at session start; record execution evidence for every Bash command inside a project that has analysis/config.json; at the end of each turn, turn executions into steps, compile the graph, refresh the package and save the agent's report (nothing happens elsewhere).",
   "hooks": {
     "SessionStart": [
       {
@@ -44,6 +44,17 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/observe.py\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/observe.py\" --stop",
+            "timeout": 120
           }
         ]
       }

@@ -10,6 +10,9 @@ silently, so installing the plugin changes nothing for ordinary projects.
                         head, and the files under the watched directories that
                         changed while the command ran (with SHA-256)
 * PostToolUseFailure  - same, with the non-zero exit code parsed from the error
+* Stop                - end of a turn: executions become steps, the graph is compiled,
+                        the package is refreshed, the agent's last message is saved as
+                        ``analysis/report.md``
 * SessionStart        - tells the agent the project is being recorded
 
 The hook never blocks a command and never raises: any internal failure exits 0.
@@ -51,9 +54,9 @@ def emit_context(text: str, event: str) -> None:
 
 
 COMPLETION_RULE = (
-    "Whatran: for tasks that report scientific or data-analysis findings, completion includes invoking "
-    "/whatran:package-analysis and producing a rerunnable, checked package; while such an analysis runs, "
-    "record its steps with /whatran:record-analysis. Other tasks are unaffected."
+    "Whatran: for tasks that report scientific or data-analysis findings, completion includes "
+    "`python3 analysis/whatran.py check` (rerun from clean and compare; see /whatran:package-analysis). "
+    "Recording is automatic. Other tasks are unaffected."
 )
 
 
@@ -62,7 +65,8 @@ def handle_session_start(payload: dict) -> None:
     root = ag.find_root(payload.get("cwd"))
     if root is None:
         emit_context(
-            COMPLETION_RULE + f" To start recording in this project: `python3 {plugin_root}/bin/whatran.py init`.",
+            COMPLETION_RULE + f" To record an analysis in this project: `python3 {plugin_root}/bin/whatran.py init` "
+            "once, then work as usual.",
             "SessionStart",
         )
         return
@@ -72,11 +76,50 @@ def handle_session_start(payload: dict) -> None:
         return
     n_exec = sum(1 for e in p.events() if e.get("event") == "exec")
     emit_context(
-        COMPLETION_RULE + f" This project already records (analysis/, {n_exec} executions captured). "
-        "After each meaningful step: `python3 analysis/whatran.py record \"<Verb> <object>\"` (verb first, at most 8 words); findings: "
-        "`claim \"...\"`; when finished: `done`, then `package` and `check`.",
+        COMPLETION_RULE + f" This project records itself (analysis/, {n_exec} executions captured): every command "
+        "is captured, and when a turn ends the steps, analysis/graph.json and the package (whatran.json, run.sh, "
+        "check.py, CI workflow) are refreshed. Optional, one line each: `python3 analysis/whatran.py claim \"<finding>\"` "
+        "for a conclusion, `reject <run id> --reason \"...\"` for an abandoned branch, `record \"<Verb> <object>\"` "
+        "to name a step yourself. `status` shows the record.",
         "SessionStart",
     )
+
+
+def handle_stop(payload: dict) -> None:
+    """End of a turn. Does nothing until something ran in the project."""
+    root = ag.find_root(payload.get("cwd"))
+    if root is None:
+        return
+    p = ag.Project(root)
+    obs = p.config.get("observe", {})
+    if not obs.get("enabled", True):
+        return
+    events = p.events()
+    if not any(e.get("event") == "exec" for e in events):
+        return
+    sf = state_file(p, "finish")
+    last = {}
+    if sf.is_file():
+        try:
+            last = json.loads(sf.read_text(encoding="utf-8"))
+        except Exception:
+            last = {}
+    size = p.events_path.stat().st_size if p.events_path.is_file() else 0
+    grew = size != last.get("events_size")
+    report = None
+    if obs.get("report", True) and payload.get("transcript_path"):
+        text = ag.last_assistant_text(payload["transcript_path"])
+        if text and (grew or ag.mentions_record(text, ag.fold_nodes(events))):
+            report = text
+    if not grew and report is None:
+        return
+    res = ag.finish(p, report=report) if grew else {"report": ag.write_report(p, report), "package": {"written": []}}
+    size = p.events_path.stat().st_size if p.events_path.is_file() else 0
+    sf.write_text(json.dumps({"events_size": size, "ts": time.time()}), encoding="utf-8")
+    written = res.get("package", {}).get("written") or []
+    if "whatran.json" in written and "run.sh" in written:
+        print(json.dumps({"systemMessage": "whatran: package written (whatran.json, run.sh, check.py, CI workflow). "
+                          "`python3 analysis/whatran.py check` reruns it from clean."}))
 
 
 def exit_code_from_failure(payload: dict) -> int | None:
@@ -184,23 +227,23 @@ def handle_tool(payload: dict) -> None:
             known.add(rel)
         files.sort(key=lambda f: f["path"])
 
+    intent = None
+    if obs.get("intent", True) and payload.get("transcript_path") and payload.get("tool_use_id"):
+        intent = ag.intent_before_tool_use(payload["transcript_path"], payload["tool_use_id"],
+                                           int(obs.get("intent_chars", 300)))
     events = p.events()
     ev = p.make_exec_event(
         command, source="claude-code-hook", exit_code=exit_code, started=start, ended=now,
         stdout=stdout, stderr=stderr, cwd=payload.get("cwd"), files_changed=files, truncated=truncated,
         session=payload.get("session_id"), tool_use_id=payload.get("tool_use_id"),
         interrupted=interrupted, events=events,
+        description=tool_input.get("description"), intent=intent,
     )
     p.append(ev)
 
-    if obs.get("nudge", True) and files:
+    if obs.get("nudge", False) and files:
         shown = ", ".join(f["path"] for f in files[:4]) + (" ..." if len(files) > 4 else "")
-        emit_context(
-            f"whatran: captured {ev['id']} (exit {exit_code}); changed: {shown}. "
-            f"If that was a scientific step, record it now: python3 analysis/whatran.py record \"<Verb> <object>\" (e.g. \"Detect peaks\") "
-            "(inputs, outputs, code and parameters are read from the command). Skip for debugging or throwaway output.",
-            event,
-        )
+        emit_context(f"whatran: captured {ev['id']} (exit {exit_code}); changed: {shown}.", event)
 
 
 def main() -> int:
@@ -208,6 +251,8 @@ def main() -> int:
         payload = read_payload()
         if "--session-start" in sys.argv or payload.get("hook_event_name") == "SessionStart":
             handle_session_start(payload)
+        elif "--stop" in sys.argv or payload.get("hook_event_name") == "Stop":
+            handle_stop(payload)
         else:
             handle_tool(payload)
     except Exception as exc:  # never break the agent's tool call

@@ -52,6 +52,11 @@ class Base(unittest.TestCase):
         code, out, err = run_ag(["init", "--name", "t", "--description", "q"], self.root)
         self.assertEqual(code, 0, err)
         self.p = ag.Project(self.root)
+        # fixtures were written moments ago; hooks attribute files changed since a command
+        # started (with a small slack), so date the fixtures back
+        for fp in self.root.rglob("*"):
+            if fp.is_file():
+                os.utime(fp, (fp.stat().st_atime - 10, fp.stat().st_mtime - 10))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -318,10 +323,10 @@ class TestHook(Base):
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 
-    def test_hook_records_exec_with_changed_files_and_nudges(self):
+    def test_hook_records_exec_with_changed_files_and_description(self):
         cmd = f"{sys.executable} scripts/step.py data/raw.csv results/out.csv 2"
         base = {"session_id": "s1", "cwd": str(self.root), "tool_name": "Bash",
-                "tool_input": {"command": cmd}, "tool_use_id": "toolu_1"}
+                "tool_input": {"command": cmd, "description": "Scale the raw values by two"}, "tool_use_id": "toolu_1"}
         self._hook(dict(base, hook_event_name="PreToolUse"))
         subprocess.run(cmd, shell=True, cwd=self.root, check=True, capture_output=True)
         out = self._hook(dict(base, hook_event_name="PostToolUse", duration_ms=50,
@@ -332,12 +337,23 @@ class TestHook(Base):
         self.assertEqual(e["source"], "claude-code-hook")
         self.assertEqual(e["exit_code"], 0)
         self.assertEqual(e["session"], "s1")
+        self.assertEqual(e["description"], "Scale the raw values by two")
         self.assertIn("results/out.csv", [f["path"] for f in e["files_changed"]])
         self.assertNotIn("analysis/events.jsonl", [f["path"] for f in e["files_changed"]])
+        self.assertEqual(out, "")                       # silent by default: the agent has nothing to do
+        self.assertFalse(list(self.p.state_dir.glob("*.json")))
+        # the optional nudge names the execution and the changed files
+        cfg = json.loads(self.p.config_path.read_text())
+        cfg["observe"]["nudge"] = True
+        self.p.config_path.write_text(json.dumps(cfg))
+        subprocess.run(cmd.replace("out.csv", "out2.csv"), shell=True, cwd=self.root, check=True, capture_output=True)
+        out = self._hook(dict(base, hook_event_name="PostToolUse", duration_ms=50, tool_use_id="toolu_1b",
+                              tool_input={"command": cmd.replace("out.csv", "out2.csv")},
+                              tool_response={"stdout": "", "stderr": "", "interrupted": False}))
         ctx = json.loads(out)["hookSpecificOutput"]
         self.assertEqual(ctx["hookEventName"], "PostToolUse")
-        self.assertIn(e["id"], ctx["additionalContext"])
-        self.assertFalse(list(self.p.state_dir.glob("*.json")))
+        self.assertIn("x-0002", ctx["additionalContext"])
+        self.assertIn("results/out2.csv", ctx["additionalContext"])
 
     def test_hook_failure_event_parses_exit_code(self):
         base = {"session_id": "s1", "cwd": str(self.root), "tool_name": "Bash",
@@ -458,9 +474,16 @@ class TestSimpleFlow(Base):
         manifest = json.loads((self.root / "whatran.json").read_text())
         self.assertEqual([s["id"] for s in manifest["steps"]], ["scale-x2-1", "scale-x10-1"])
         self.assertIn("site/", (self.root / ".gitignore").read_text())
-        # second call keeps existing files
+        self.assertTrue(ag.run_sh_is_generated(run_sh))
+        self.assertTrue(ag.manifest_is_generated(manifest))
+        # a second call changes nothing; an edited run.sh is kept
         code, out, _ = run_ag(["package"], self.root)
-        self.assertIn("kept    run.sh", out)
+        self.assertNotIn("wrote", out)
+        self.assertIn("kept    check.py", out)
+        (self.root / "run.sh").write_text(run_sh + "echo done\n")
+        code, out, _ = run_ag(["package"], self.root)
+        self.assertIn("kept    run.sh  (edited", out)
+        self.assertTrue((self.root / "run.sh").read_text().endswith("echo done\n"))
 
     def test_check_reruns_compares_and_marks_replay(self):
         self._two_step_analysis()
@@ -490,6 +513,235 @@ class TestSimpleFlow(Base):
         code, _, err = run_ag(["check"], self.root)
         self.assertEqual(code, 2)
         self.assertIn("package", err)
+
+
+def hook(root, payload):
+    r = subprocess.run([sys.executable, str(OBSERVE)], input=json.dumps(payload),
+                       capture_output=True, text=True, cwd=root)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def transcript_entry(role, text=None, tool=None, tool_result=None, msg_id=None):
+    """One Claude Code transcript line (compact JSON, as the app writes it)."""
+    content = []
+    if text:
+        content.append({"type": "text", "text": text})
+    if tool:
+        tool_id, command, description = tool
+        content.append({"type": "tool_use", "id": tool_id, "name": "Bash",
+                        "input": {"command": command, "description": description}})
+    if tool_result:
+        content.append({"type": "tool_result", "tool_use_id": tool_result, "content": "ok"})
+    msg = {"role": role, "content": content}
+    if role == "assistant":
+        msg["id"] = msg_id or f"msg_{abs(hash(text or tool_result or ''))}"
+    return {"type": role, "isSidechain": False, "message": msg}
+
+
+def write_transcript(path, entries):
+    path.write_text("\n".join(json.dumps(e, separators=(",", ":")) for e in entries) + "\n")
+
+
+class TestAutomatic(Base):
+    """Nothing is required of the agent: captured executions become steps, and the end of
+    a turn compiles the graph, refreshes the package and saves the agent's report."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = tempfile.TemporaryDirectory()                 # transcripts live outside the project
+        self.transcript = Path(self.home.name) / "transcript.jsonl"
+        self.py = sys.executable
+
+    def tearDown(self):
+        self.home.cleanup()
+        super().tearDown()
+
+    def _bash(self, command, tool_id, description=None, transcript=True):
+        base = {"session_id": "s1", "cwd": str(self.root), "tool_name": "Bash",
+                "tool_input": {"command": command, **({"description": description} if description else {})},
+                "tool_use_id": tool_id}
+        if transcript:
+            base["transcript_path"] = str(self.transcript)
+        hook(self.root, dict(base, hook_event_name="PreToolUse"))
+        r = subprocess.run(command, shell=True, cwd=self.root, capture_output=True, text=True)
+        event = "PostToolUse" if r.returncode == 0 else "PostToolUseFailure"
+        extra = ({"tool_response": {"stdout": r.stdout, "stderr": r.stderr, "interrupted": False}}
+                 if r.returncode == 0 else {"error": f"Exit code {r.returncode}\n{r.stderr}"})
+        return hook(self.root, dict(base, hook_event_name=event, duration_ms=50, **extra))
+
+    def _stop(self):
+        return hook(self.root, {"hook_event_name": "Stop", "cwd": str(self.root), "session_id": "s1",
+                                "transcript_path": str(self.transcript), "stop_hook_active": False})
+
+    def _flag(self, dst, k):
+        return f"{self.py} scripts/flagstep.py --src data/raw.csv --dst results/{dst} --k {k}"
+
+    def test_hook_keeps_the_agents_words(self):
+        c1, c2 = self._flag("b.csv", 3), self._flag("c.csv", 4)
+        write_transcript(self.transcript, [
+            transcript_entry("user", "please scale the data"),
+            transcript_entry("assistant", "I'll scale the values by three first.", msg_id="m1"),
+            transcript_entry("assistant", tool=("toolu_1", c1, "Scale raw values by three"), msg_id="m1"),
+            transcript_entry("user", tool_result="toolu_1"),
+            transcript_entry("assistant", "Done. Now the same by four.", tool=("toolu_2", c2, None), msg_id="m2"),
+        ])
+        self._bash(c1, "toolu_1", "Scale raw values by three")
+        self._bash(c2, "toolu_2")
+        e1, e2 = ag.exec_events(self.p.events())
+        self.assertEqual(e1["description"], "Scale raw values by three")
+        self.assertEqual(e1["intent"], "I'll scale the values by three first.")
+        self.assertNotIn("description", e2)
+        self.assertEqual(e2["intent"], "Done. Now the same by four.")
+        # the person's words are never taken
+        self.assertNotIn("please", json.dumps(self.p.events()))
+        # switched off per project
+        cfg = json.loads(self.p.config_path.read_text())
+        cfg["observe"]["intent"] = False
+        self.p.config_path.write_text(json.dumps(cfg))
+        self._bash(self._flag("d.csv", 5), "toolu_2")
+        self.assertNotIn("intent", ag.exec_events(self.p.events())[-1])
+
+    def test_labels_come_from_the_agents_words_or_the_command(self):
+        self.assertEqual(ag.label_from_words("Scale raw values by three", self.p), "Scale raw values by three")
+        self.assertEqual(ag.label_from_words("Running the scaling script now", self.p), "Run the scaling script now")
+        self.assertEqual(ag.label_from_words("Good. Next, let me fit the model to the clean table.", self.p),
+                         "Fit the model to the clean table")
+        self.assertEqual(ag.label_from_words("I'll compare groups with a Welch t-test and then plot.", self.p),
+                         "Compare groups with a Welch t-test")
+        self.assertIsNone(ag.label_from_words("The stats look fine.", self.p))
+        self.assertIsNone(ag.label_from_words("现在跑统计", self.p))
+        ev = {"command": f"{self.py} scripts/flagstep.py --src data/raw.csv --dst results/b.csv --k 3", "cwd": ".",
+              "files_changed": [{"path": "results/b.csv"}]}
+        self.assertEqual(ag.auto_label(self.p, ev), ("Run flagstep.py", "command"))
+        self.assertEqual(ag.auto_label(self.p, dict(ev, intent="Now scale the values by three.")), ("Scale the values by three", "intent"))
+        self.assertEqual(ag.auto_label(self.p, dict(ev, description="scale values", intent="x")), ("Scale values", "description"))
+        self.assertEqual(ag.auto_label(self.p, dict(ev, description="Quick sanity pass over the table")),
+                         ("Quick sanity pass over the table", "description"))
+
+    def test_done_turns_executions_into_steps(self):
+        run_ag(["run", "--", self._flag("b.csv", 3)], self.root)                      # a step: result file produced
+        run_ag(["run", "--", f"{self.py} -c \"open('scripts/new.py','w').write('x')\""], self.root)   # authoring a script
+        run_ag(["run", "--", f"{self.py} -c \"open('results/bad.csv','w').write('x'); raise SystemExit(1)\""], self.root)  # failed
+        run_ag(["run", "--", "mkdir -p results/sub && cp data/raw.csv results/sub/raw.csv"], self.root)   # housekeeping
+        code, out, err = run_ag(["done"], self.root)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn('recorded run-run-flagstep-py-1  "Run flagstep.py"  (label from the command)', out)
+        g = json.loads(self.p.graph_path.read_text())
+        runs = [n for n in g["nodes"] if n["type"] == "run"]
+        self.assertEqual(len(runs), 1)
+        r = runs[0]
+        self.assertEqual(r["auto"], {"label_from": "command"})
+        self.assertEqual(r["evidence"]["level"], "observed")
+        self.assertEqual(r["params"], {"k": 3})
+        self.assertEqual(g["summary"]["executions"], {"total": 4, "linked": 1})
+        self.assertTrue((self.root / "whatran.json").is_file())
+        self.assertIn("--k 3", (self.root / "run.sh").read_text())
+        # repeatable: nothing new on a second pass
+        n = len(self.p.events())
+        run_ag(["done"], self.root)
+        self.assertEqual(len(self.p.events()), n)
+
+    def test_redo_supersedes_and_exact_repeat_attaches(self):
+        run_ag(["run", "--", self._flag("b.csv", 3)], self.root)
+        run_ag(["done", "--no-package"], self.root)
+        run_ag(["run", "--", self._flag("b.csv", 4)], self.root)             # same file, other parameter: a redo
+        code, out, _ = run_ag(["done", "--no-package"], self.root)
+        self.assertIn("supersedes run-run-flagstep-py-1", out)
+        nodes = ag.fold_nodes(self.p.events())
+        self.assertEqual(nodes["run-run-flagstep-py-1"]["status"], "superseded")
+        self.assertEqual(nodes["run-run-flagstep-py-2"]["supersedes"], "run-run-flagstep-py-1")
+        self.assertEqual(len([n for n in nodes.values() if n["type"] == "artifact" and n["path"] == "results/b.csv"]), 2)
+        run_ag(["run", "--", self._flag("b.csv", 4)], self.root)             # identical rerun: same command, same bytes
+        code, out, _ = run_ag(["done", "--no-package"], self.root)
+        self.assertIn("attached x-0003 to run-run-flagstep-py-2", out)
+        nodes = ag.fold_nodes(self.p.events())
+        self.assertEqual(len([n for n in nodes.values() if n["type"] == "run"]), 2)
+        self.assertEqual(nodes["run-run-flagstep-py-2"]["evidence"]["exec_ids"], ["x-0002", "x-0003"])
+        # a replay of the whole pipeline under another command only regenerates known files: not a step
+        run_ag(["run", "--", f"bash -c '{self._flag('b.csv', 4)}'"], self.root)
+        run_ag(["done", "--no-package"], self.root)
+        g = json.loads(self.p.graph_path.read_text())
+        self.assertEqual(g["summary"]["runs"]["total"], 2)
+        self.assertEqual(g["summary"]["executions"], {"total": 4, "linked": 3})
+        self.assertEqual(g["main_path"].count("run-run-flagstep-py-2"), 1)
+        self.assertNotIn("run-run-flagstep-py-1", g["main_path"])
+
+    def test_rewriting_an_input_in_place_is_a_new_step(self):
+        run_ag(["run", "--label", "Scale x2", "--", f"{self.py} scripts/step.py data/raw.csv results/a.csv 2"], self.root)
+        run_ag(["run", "--label", "Scale again", "--in", "results/a.csv", "--",
+                f"{self.py} scripts/step.py results/a.csv results/a.csv 10"], self.root)
+        nodes = ag.fold_nodes(self.p.events())
+        self.assertEqual(nodes["run-scale-x2-1"]["status"], "completed")
+        self.assertNotIn("supersedes", nodes["run-scale-again-1"])
+
+    def test_stop_hook_finishes_the_turn(self):
+        c1 = self._flag("b.csv", 3)
+        entries = [
+            transcript_entry("user", "scale the data by three and report"),
+            transcript_entry("assistant", "Scaling the values by three.", tool=("toolu_1", c1, None), msg_id="m1"),
+            transcript_entry("user", tool_result="toolu_1"),
+            transcript_entry("assistant", "Done. The values tripled; see results/b.csv.", msg_id="m2"),
+        ]
+        write_transcript(self.transcript, entries)
+        self._bash(c1, "toolu_1")
+        out = self._stop()
+        self.assertIn("package written", json.loads(out)["systemMessage"])
+        g = json.loads(self.p.graph_path.read_text())
+        runs = [n for n in g["nodes"] if n["type"] == "run"]
+        self.assertEqual([r["label"] for r in runs], ["Scale the values by three"])
+        self.assertEqual(runs[0]["auto"], {"label_from": "intent"})
+        self.assertEqual(runs[0]["intent"], "Scaling the values by three.")
+        report = (self.root / "analysis" / "report.md").read_text()
+        self.assertTrue(report.startswith("<!-- whatran:"))
+        self.assertIn("The values tripled; see results/b.csv.", report)
+        self.assertNotIn("scale the data by three and report", report)       # the person's words stay out
+        for rel in ("whatran.json", "run.sh", "check.py", ".github/workflows/reproduce.yml"):
+            self.assertTrue((self.root / rel).is_file(), rel)
+        self.assertEqual(json.loads((self.root / "whatran.json").read_text())["steps"][0]["title"], "Scale the values by three")
+        # a second Stop with nothing new: silent, nothing rewritten
+        n_events = len(self.p.events())
+        stamp = (self.root / "analysis" / "report.md").stat().st_mtime_ns
+        self.assertEqual(self._stop(), "")
+        self.assertEqual(len(self.p.events()), n_events)
+        self.assertEqual((self.root / "analysis" / "report.md").stat().st_mtime_ns, stamp)
+        # small talk does not replace the report; a later summary that names a result does
+        entries += [transcript_entry("user", "what day is it"), transcript_entry("assistant", "Thursday.", msg_id="m3")]
+        write_transcript(self.transcript, entries)
+        self._stop()
+        self.assertIn("The values tripled", (self.root / "analysis" / "report.md").read_text())
+        entries += [transcript_entry("user", "summarise"),
+                    transcript_entry("assistant", "Summary: results/b.csv holds the tripled values.", msg_id="m4")]
+        write_transcript(self.transcript, entries)
+        self._stop()
+        self.assertIn("Summary: results/b.csv", (self.root / "analysis" / "report.md").read_text())
+        # the analysis continues: a new step refreshes the untouched manifest and run.sh
+        c2 = f"{self.py} scripts/flagstep.py --src results/b.csv --dst results/c.csv --k 10"
+        entries += [transcript_entry("user", "now scale that by ten"),
+                    transcript_entry("assistant", tool=("toolu_2", c2, "Scale the tripled values by ten"), msg_id="m5"),
+                    transcript_entry("user", tool_result="toolu_2"),
+                    transcript_entry("assistant", "results/c.csv is ready.", msg_id="m6")]
+        write_transcript(self.transcript, entries)
+        self._bash(c2, "toolu_2", "Scale the tripled values by ten")
+        (self.root / "run.sh").write_text((self.root / "run.sh").read_text() + "# edited by hand\n")
+        self.assertEqual(self._stop(), "")                                    # the package already exists: no message
+        manifest = json.loads((self.root / "whatran.json").read_text())
+        self.assertEqual([s["title"] for s in manifest["steps"]], ["Scale the values by three", "Scale the tripled values by ten"])
+        self.assertIn("# edited by hand", (self.root / "run.sh").read_text())   # the edited script is kept
+        self.assertNotIn("--k 10", (self.root / "run.sh").read_text())
+        # and the whole thing still checks
+        code, out, err = run_ag(["package", "--force"], self.root)
+        code, out, err = run_ag(["check"], self.root)
+        self.assertEqual(code, 0, out + err)
+        g = json.loads(self.p.graph_path.read_text())
+        self.assertEqual(g["summary"]["runs"]["replay_verified"], 2)
+
+    def test_stop_hook_is_silent_without_a_recording(self):
+        with tempfile.TemporaryDirectory() as other:
+            self.assertEqual(hook(other, {"hook_event_name": "Stop", "cwd": other, "session_id": "s"}), "")
+        self.assertEqual(self._stop(), "")                                    # initialised, nothing ran yet
+        self.assertFalse(self.p.graph_path.exists())
+        self.assertFalse((self.root / "whatran.json").exists())
 
 
 class TestEmbeddedAssets(unittest.TestCase):
