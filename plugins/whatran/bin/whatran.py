@@ -810,7 +810,7 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
                note: Optional[str], status: str, supersedes: Optional[str],
                node_id: Optional[str] = None, exec_event: Optional[Dict[str, Any]] = None,
                infer: bool = True, style: Optional[bool] = None, auto: Optional[str] = None) -> Dict[str, Any]:
-    enforce_style(p, label=label, sentences={"note": note}, enabled=style)
+    warnings: List[str] = enforce_style(p, label=label, sentences={"note": note}, enabled=style)
     events = p.events()
     nodes = fold_nodes(events)
     rel_in = [p.rel(x) for x in inputs]
@@ -818,7 +818,6 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
     rel_code = [p.rel(x) for x in code]
     params = dict(params or {})
     new_nodes: List[Dict[str, Any]] = []
-    warnings: List[str] = []
 
     ev = exec_event or resolve_evidence(events, nodes, evidence_mode, rel_out, rel_code, command)
 
@@ -969,7 +968,7 @@ def resolve_support(p: Project, nodes: "OrderedDict[str, Dict[str, Any]]", ref: 
 
 def record_claim(p: Project, text: str, supports: List[str], status: str, note: Optional[str],
                  node_id: Optional[str] = None, style: Optional[bool] = None) -> Dict[str, Any]:
-    enforce_style(p, sentences={"claim": text, "note": note}, enabled=style)
+    warnings = enforce_style(p, sentences={"claim": text, "note": note}, enabled=style)
     events = p.events()
     nodes = fold_nodes(events)
     ids = [resolve_support(p, nodes, s) for s in supports]
@@ -997,7 +996,8 @@ def record_claim(p: Project, text: str, supports: List[str], status: str, note: 
     if note:
         claim["note"] = note
     p.append({"event": "node", "node": claim})
-    warnings = [] if ids else ["claim has no supporting evidence; add --supports <run id | artifact path>"]
+    if not ids:
+        warnings.append("claim has no supporting evidence; add --supports <run id | artifact path>")
     return {"id": cid, "supported_by": ids, "auto_supports": auto, "warnings": warnings}
 
 
@@ -2362,6 +2362,7 @@ PREFERRED_WORDS = {
 
 STYLE_DEFAULT: Dict[str, Any] = {
     "enabled": True,
+    "strict": False,      # True: a record that breaks the rules is refused instead of warned about
     "max_label_words": 8,
     "max_sentence_words": 20,
     "verbs": [],          # extra approved verbs for this project
@@ -2477,20 +2478,36 @@ def style_enabled(p: Optional["Project"], override: Optional[bool] = None) -> bo
     return bool(cfg.get("enabled", True))
 
 
+def style_strict(p: Optional["Project"]) -> bool:
+    if os.environ.get("WHATRAN_STYLE_STRICT"):
+        return True
+    cfg = dict(STYLE_DEFAULT)
+    if p is not None:
+        cfg.update(p.config.get("style") or {})
+    return bool(cfg.get("strict", False))
+
+
 def enforce_style(p: Optional["Project"], *, label: Optional[str] = None, sentences: Optional[Dict[str, Optional[str]]] = None,
-                  enabled: Optional[bool] = None) -> None:
-    """Raise StyleError listing every problem, or return silently."""
+                  enabled: Optional[bool] = None) -> List[str]:
+    """The writing-rule problems of a record, as warnings ("style: ..."). The record is
+    still accepted; with style.strict (or WHATRAN_STYLE_STRICT=1) it is refused instead."""
     if not style_enabled(p, enabled):
-        return
+        return []
     problems: List[str] = []
     if label is not None:
         problems += [f'label "{label}": {x}' for x in check_label(label, p)]
     for what, text in (sentences or {}).items():
         if text:
             problems += [f"{what}: {x}" for x in check_sentences(text, p, what)]
-    if problems:
+    if problems and style_strict(p):
         raise StyleError("the record does not follow the writing rules (short, verb-first, no hedging; "
                          "--no-style or WHATRAN_NO_STYLE=1 to bypass):\n  - " + "\n  - ".join(problems))
+    return [f"style: {x}" for x in problems]
+
+
+def _warn(problems: List[str]) -> None:
+    for x in problems:
+        sys.stderr.write(f"whatran: {x}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -2499,11 +2516,12 @@ def enforce_style(p: Optional["Project"], *, label: Optional[str] = None, senten
 
 def begin_step(p: Project, label: str, *, code: Optional[List[str]] = None, note: Optional[str] = None,
                style: Optional[bool] = None) -> str:
-    enforce_style(p, label=label, sentences={"note": note}, enabled=style)
+    problems = enforce_style(p, label=label, sentences={"note": note}, enabled=style)
     p.state_dir.mkdir(parents=True, exist_ok=True)
     token = f"s-{int(time.time() * 1000):x}-{os.getpid():x}"
     state = {
         "label": label,
+        "style_warnings": problems,
         "started": time.time(),
         "cwd": os.getcwd(),
         "code": [p.rel(c) for c in (code or [])],
@@ -2525,7 +2543,9 @@ def end_step(p: Project, token: str, *, inputs: Optional[List[str]] = None, outp
     files, truncated = p.changed_since_snapshot(before)
     ended = time.time()
     note = note or state.get("note")
-    enforce_style(p, sentences={"note": note}, enabled=style)
+    problems = list(state.get("style_warnings") or [])
+    if note and note != state.get("note"):
+        problems += enforce_style(p, sentences={"note": note}, enabled=style)
     ev = p.make_exec_event(None, source="step", exit_code=0 if status == "completed" else 1,
                            started=state["started"], ended=ended, cwd=state.get("cwd"),
                            files_changed=files, truncated=truncated)
@@ -2535,6 +2555,7 @@ def end_step(p: Project, token: str, *, inputs: Optional[List[str]] = None, outp
                      code=code or state.get("code") or [], params=params or {}, command=None,
                      evidence_mode=ev["id"], note=note, status=status, supersedes=supersedes, exec_event=ev,
                      style=False)
+    res["warnings"] = problems + res["warnings"]
     try:
         sf.unlink()
     except OSError:
@@ -2592,6 +2613,7 @@ def record(label: str, *, inputs: Any = (), outputs: Any = (), code: Any = (), p
     res = record_run(p, label, inputs=list(_strs(inputs)), outputs=list(_strs(outputs)), code=list(_strs(code)),
                      params=params or {}, command=command, evidence_mode=evidence, note=note, status="completed",
                      supersedes=_id(supersedes) if supersedes else None, infer=infer, style=style)
+    _warn(res["warnings"])
     return res["id"]
 
 
@@ -2652,6 +2674,7 @@ class step:
                                params=params, status="failed" if exc_type else "completed",
                                supersedes=self.supersedes, style=self.style)
         self.id = self.result["id"]
+        _warn(self.result["warnings"])
         return False
 
     def __call__(self, fn):
@@ -2702,13 +2725,14 @@ def claim(text: str, supports: Any = (), note: Optional[str] = None, style: Opti
     sup = [str(_id(s)) for s in (supports if not isinstance(supports, (str, os.PathLike)) and supports is not None else [supports])]
     sup = [s for s in sup if s and s != "None"]
     res = record_claim(p, text, sup, "tentative", note, style=style)
+    _warn(res["warnings"])
     return res["id"]
 
 
 def reject(node: Any, reason: str, style: Optional[bool] = None) -> None:
     """Abandon a run or claim with a reason. It stays in the record, hidden from the result path."""
     p = _project()
-    enforce_style(p, sentences={"reason": reason}, enabled=style)
+    _warn(enforce_style(p, sentences={"reason": reason}, enabled=style))
     nodes = fold_nodes(p.events())
     nid = _id(node)
     if nid not in nodes:
@@ -2725,9 +2749,9 @@ def edit(node: Any, *, label: Optional[str] = None, note: Optional[str] = None, 
     if nid not in nodes:
         raise AgError(f"unknown node {nid}")
     n = nodes[nid]
-    enforce_style(p, label=label if (label is not None and n.get("type") == "run") else None,
-                  sentences={"note": note, "label": label if (label is not None and n.get("type") == "claim") else None},
-                  enabled=style)
+    _warn(enforce_style(p, label=label if (label is not None and n.get("type") == "run") else None,
+                        sentences={"note": note, "label": label if (label is not None and n.get("type") == "claim") else None},
+                        enabled=style))
     fields: Dict[str, Any] = {}
     if label is not None:
         fields["label"] = label
@@ -2934,7 +2958,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise AgError("nothing to run: whatran.py run [options] -- COMMAND ...")
     cmd_str = cmd[0] if len(cmd) == 1 else shlex.join(cmd)
     if args.label:
-        enforce_style(p, label=args.label, sentences={"note": args.note}, enabled=False if args.no_style else None)
+        _warn(enforce_style(p, label=args.label, sentences={"note": args.note}, enabled=False if args.no_style else None))
     events = p.events()
     before = p.snapshot()
     started = time.time()
@@ -2975,9 +2999,11 @@ def cmd_reject(args: argparse.Namespace) -> int:
         raise AgError(f"unknown node {args.id}")
     if nodes[args.id].get("type") == "artifact":
         raise AgError("artifacts cannot be rejected; reject the run that produced them")
-    enforce_style(p, sentences={"reason": args.reason}, enabled=False if args.no_style else None)
+    problems = enforce_style(p, sentences={"reason": args.reason}, enabled=False if args.no_style else None)
     p.append({"event": "status", "id": args.id, "status": "rejected", "reason": args.reason})
     print(f"{args.id} marked rejected (kept in the record): {args.reason}")
+    for x in problems:
+        print(f"  warning: {x}")
     return 0
 
 
@@ -2988,9 +3014,9 @@ def cmd_update(args: argparse.Namespace) -> int:
         raise AgError(f"unknown node {args.id}")
     fields: Dict[str, Any] = {}
     t = nodes[args.id].get("type")
-    enforce_style(p, label=args.label if (args.label and t == "run") else None,
-                  sentences={"note": args.note, "label": args.label if (args.label and t == "claim") else None},
-                  enabled=False if args.no_style else None)
+    problems = enforce_style(p, label=args.label if (args.label and t == "run") else None,
+                             sentences={"note": args.note, "label": args.label if (args.label and t == "claim") else None},
+                             enabled=False if args.no_style else None)
     if args.label:
         fields["label"] = args.label
     if args.note:
@@ -3010,6 +3036,8 @@ def cmd_update(args: argparse.Namespace) -> int:
         raise AgError("nothing to update")
     p.append({"event": "update", "id": args.id, "fields": fields})
     print(f"updated {args.id}: {', '.join(fields)}")
+    for x in problems:
+        print(f"  warning: {x}")
     return 0
 
 
@@ -3565,7 +3593,7 @@ def _add_step_flags(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--params-json", metavar="JSON", help=argparse.SUPPRESS)
     sp.add_argument("--supersedes", metavar="RUN_ID", help="this run replaces an earlier one (kept, marked superseded)")
     sp.add_argument("--note")
-    sp.add_argument("--no-style", action="store_true", help="skip the writing rules for this record")
+    sp.add_argument("--no-style", action="store_true", help="no writing-rule warnings for this record")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3602,7 +3630,7 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--supports", action="append", metavar="ID|PATH", help="run id or output file it rests on (repeatable)")
     rc.add_argument("--status", default="tentative", choices=CLAIM_STATUSES, help=hidden)
     rc.add_argument("--note")
-    rc.add_argument("--no-style", action="store_true", help="skip the writing rules for this record")
+    rc.add_argument("--no-style", action="store_true", help="no writing-rule warnings for this record")
     rc.add_argument("--id", help=hidden)
     rc.add_argument("--json", action="store_true", help=hidden)
     rc.set_defaults(func=cmd_claim)

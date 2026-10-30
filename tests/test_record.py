@@ -779,37 +779,51 @@ class TestStyle(Base):
         self.assertTrue(any("21 words" in x for x in ag.check_sentences(" ".join(["word"] * 21))))
         self.assertTrue(any('"do" instead of "perform"' in x for x in ag.check_sentences("Perform the test")))
 
-    def test_cli_enforces_and_no_style_bypasses(self):
+    def test_cli_warns_and_strict_refuses(self):
+        # the record is accepted; the warning names the fix
+        code, out, err = run_ag(["record", "Peak detection"], self.root)
+        self.assertEqual(code, 0, err)
+        self.assertIn("warning: style:", out)
+        self.assertIn("Detect peaks", out)
+        self.assertIn("run-peak-detection-1", ag.fold_nodes(self.p.events()))
+        code, out, err = run_ag(["record", "Peak detection", "--no-style"], self.root)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("style", out)
+        code, out, _ = run_ag(["claim", "We think it is probably higher"], self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("warning: style:", out)
+        code, out, _ = run_ag(["reject", "run-peak-detection-1", "--reason", "It was perhaps wrong"], self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("warning: style:", out)
+        self.assertEqual(ag.fold_nodes(self.p.events())["run-peak-detection-1"]["status"], "rejected")
+        code, out, _ = run_ag(["reject", "run-peak-detection-2", "--reason", "Threshold calls noise as peaks"], self.root)
+        self.assertEqual(code, 0)
+        self.assertNotIn("warning", out)
+        # strict projects refuse instead
+        cfg = json.loads(self.p.config_path.read_text())
+        cfg["style"] = {"strict": True}
+        self.p.config_path.write_text(json.dumps(cfg))
         code, _, err = run_ag(["record", "Peak detection"], self.root)
         self.assertEqual(code, 2)
         self.assertIn("writing rules", err)
-        self.assertIn("Detect peaks", err)
         code, _, err = run_ag(["record", "Peak detection", "--no-style"], self.root)
-        self.assertEqual(code, 0, err)
-        code, _, err = run_ag(["claim", "We think it is probably higher"], self.root)
-        self.assertEqual(code, 2)
-        code, _, err = run_ag(["reject", "run-peak-detection-1", "--reason", "It was perhaps wrong"], self.root)
-        self.assertEqual(code, 2)
-        code, _, err = run_ag(["reject", "run-peak-detection-1", "--reason", "Threshold calls noise as peaks"], self.root)
         self.assertEqual(code, 0, err)
 
     def test_project_can_extend_replace_or_disable_the_verbs(self):
         cfg = json.loads(self.p.config_path.read_text())
         cfg["style"] = {"verbs": ["deconvolve"]}
         self.p.config_path.write_text(json.dumps(cfg))
-        code, _, err = run_ag(["record", "Deconvolve spectra"], self.root)
-        self.assertEqual(code, 0, err)
+        self.assertEqual(ag.check_label("Deconvolve spectra", ag.Project(self.root)), [])
         (self.root / "verbs.txt").write_text("frobnicate\n")
         cfg["style"] = {"verbs_file": "verbs.txt"}
         self.p.config_path.write_text(json.dumps(cfg))
-        code, _, _ = run_ag(["record", "Frobnicate data"], self.root)
-        self.assertEqual(code, 0)
-        code, _, _ = run_ag(["record", "Detect peaks"], self.root)
-        self.assertEqual(code, 2)                      # the file replaces the built-in list
+        self.assertEqual(ag.check_label("Frobnicate data", ag.Project(self.root)), [])
+        self.assertTrue(ag.check_label("Detect peaks", ag.Project(self.root)))      # the file replaces the built-in list
         cfg["style"] = {"enabled": False}
         self.p.config_path.write_text(json.dumps(cfg))
-        code, _, _ = run_ag(["record", "Peak detection"], self.root)
+        code, out, _ = run_ag(["record", "Peak detection"], self.root)
         self.assertEqual(code, 0)
+        self.assertNotIn("style", out)
 
 
 class TestAPI(Base):
@@ -877,11 +891,19 @@ class TestAPI(Base):
         self.assertIn(rid, nodes)
         self.assertEqual(sum(1 for e in self.p.events() if e.get("event") == "retract"), 1)
         self.assertEqual(ag.build_graph(self.p)["summary"]["retracted"], 1)
-        with self.assertRaises(ag.StyleError):
-            ag.record("Peak detection")
-        with self.assertRaises(ag.StyleError):
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rid2 = ag.record("Peak detection")
             ag.claim("We think so")
-        ag.record("Peak detection", style=False)
+            ag.record("Peak detection", style=False)
+        self.assertIn(rid2, ag.fold_nodes(self.p.events()))
+        self.assertEqual(err.getvalue().count("whatran: style:"), 2)
+        os.environ["WHATRAN_STYLE_STRICT"] = "1"
+        try:
+            with self.assertRaises(ag.StyleError):
+                ag.record("Peak detection")
+        finally:
+            del os.environ["WHATRAN_STYLE_STRICT"]
 
 
 class TestBeginEnd(Base):
@@ -898,8 +920,11 @@ class TestBeginEnd(Base):
         self.assertFalse(list(self.p.state_dir.glob("step-*.json")))
         code, _, _ = run_ag(["end", token], self.root)
         self.assertEqual(code, 2)
-        code, _, err = run_ag(["begin", "Peak detection"], self.root)
-        self.assertEqual(code, 2)
+        code, out, err = run_ag(["begin", "Peak detection"], self.root)
+        self.assertEqual(code, 0, err)
+        code, out, _ = run_ag(["end", out.strip()], self.root)
+        self.assertEqual(code, 0)
+        self.assertIn("warning: style:", out)           # the label's problems surface when the step closes
 
 
 @unittest.skipUnless(shutil.which("Rscript"), "Rscript not installed")
