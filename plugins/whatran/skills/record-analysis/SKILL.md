@@ -5,30 +5,44 @@ description: Record what actually ran during a scientific or data analysis as a 
 
 # Record the analysis
 
-Analyse the way you normally would. Alongside, keep a record that distinguishes
-what was **observed to run** from what you merely **say** ran.
+Analyse the way you normally would. In Claude Code the record keeps itself:
+hooks capture every command you run, and when your turn ends every captured
+command that produced result files becomes a step, `analysis/graph.json` is
+compiled, the package (`whatran.json`, `run.sh`, `check.py`, CI workflow) is
+written or refreshed, and your last message is saved as `analysis/report.md`.
 
-Commands are captured automatically (Claude Code hooks). You add the meaning:
+What you do:
 
 ```bash
 python3 <plugin root>/bin/whatran.py init      # once per project, before the first step (plugin root = two directories above this skill)
-python3 analysis/whatran.py record "Detect peaks"         # after a step that produced something worth keeping
-python3 analysis/whatran.py claim "Feature 301.1 is higher in group B (p < 0.05)"   # a finding
-python3 analysis/whatran.py reject run-detect-peaks-1 --reason "Threshold 1.1 calls noise as peaks"
-python3 analysis/whatran.py done               # at the end: compile, check files, draft the package
+python3 analysis/whatran.py check              # when the analysis is finished: rerun from clean and compare (package-analysis skill)
+```
+
+Steps are named from the `description` you give each Bash command, so write
+it as what the step does: `Detect peaks at threshold 5`, not `Run script`.
+Without a description, the last thing you said before the command is used;
+without that, the command (`Run detect_peaks.py`).
+
+Three optional one-liners make the record better. Use them when they are cheap:
+
+```bash
+python3 analysis/whatran.py claim "Feature 301.1 is higher in group B (p < 0.05)"   # a finding; attaches to the last step
+python3 analysis/whatran.py reject run-detect-peaks-loose-1 --reason "Threshold 1.1 calls noise as peaks"
+python3 analysis/whatran.py record "Detect peaks" --param threshold=5      # name a step yourself, or fix a guess
+python3 analysis/whatran.py status                                          # what is recorded, what is unlinked
 ```
 
 `record` needs only the label. Inputs, outputs, code and parameters are read
-from the captured command; the output tells you what it inferred. If it got
-something wrong: `--in`, `--out`, `--code`, `--param k=v` override, or
-`update <id> --param k=v` afterwards. Outside Claude Code (Codex, a shell), run
-each step as `python3 analysis/whatran.py run -- <command>` so it is captured.
+from the captured command; `--in`, `--out`, `--code`, `--param k=v` override,
+and `update <id> --param k=v` amends afterwards. Outside Claude Code (Codex, a
+shell), run each step as `python3 analysis/whatran.py run -- <command>` so it
+is captured, and call `python3 analysis/whatran.py done` at the end; it does
+what the turn end does in Claude Code.
 
-## Writing rules (enforced)
+## Writing rules
 
-Every label, claim, note and reason must follow these rules; a record that
-breaks them is refused and the error names the fix. Keep to them and records
-stay short, uniform and cheap.
+Labels, claims, notes and reasons that follow these rules stay short, uniform
+and cheap. A record that breaks one is kept, with a warning that names the fix.
 
 - A step label starts with an approved verb and has at most 8 words:
   `Detect peaks`, `Compare groups with Welch t-test`, `Fit linear model`.
@@ -62,26 +76,22 @@ id <- whatran_step("Detect peaks", { ... }, params = list(threshold = 5), inputs
 Any language can do the same with `whatran.py begin "Label"` (prints a token)
 and `whatran.py end TOKEN --param k=v` around the code.
 
-## When to record
+## What becomes a step, and what does not
 
-- A step **produced something a scientist would want to inspect or reuse**:
-  processed data, a table, a statistic, a model, a figure, a QC report. Not
-  `ls`, file peeks, environment checks, debugging reruns.
-- **One record per scientific step.** Name it by what it does ("Differential
-  abundance, limma"), not by the script name.
-- **A changed parameter or method is a new record**, with `--supersedes <old id>`
-  if it replaces the old one. Never overwrite; the old step stays.
-- **Abandoned branches get `reject`**, not silence. The viewer hides them by
-  default and never deletes them.
-- **Findings get `claim`.** A claim attaches to the last completed step unless
-  you pass `--supports <run id or output file>`.
+- A captured command becomes a step when it succeeded and changed at least one
+  file that is not code or configuration. Writing a script, installing
+  packages, moving or copying files, and failed commands do not become steps;
+  they stay in the execution log.
+- **A changed parameter or method is a new step.** When it remakes the same
+  result file, the earlier step is marked superseded automatically. An exact
+  repeat (same command, same output bytes) is attached to the step it repeats.
+- **Abandoned branches deserve `reject`** with a reason. Without it the record
+  still shows which attempt is current, but not why.
+- **Findings deserve `claim`.** A claim attaches to the last completed step
+  unless you pass `--supports <run id or output file>`.
 - **Never write evidence by hand.** No hashes, exit codes or edits to
   `analysis/events.jsonl`. A step that ran where nothing could capture it is
   recorded as `declared`; say so when reporting.
-
-When a hook says `captured x-0012; changed: results/peaks.csv`, decide right
-then: scientific step or noise? If a step, `record "<what it did>"` while you
-still know what the command was for.
 
 ## Joining an analysis already in progress
 
@@ -91,29 +101,29 @@ when it takes seconds or minutes: it becomes `observed`), or record it with
 the command and its outputs:
 
 ```bash
-python3 analysis/whatran.py record "Peak detection" --cmd "python scripts/detect.py --ppm 15 data/raw.mzML results/peaks.csv" --out results/peaks.csv
+python3 analysis/whatran.py record "Detect peaks" --cmd "python scripts/detect.py --ppm 15 data/raw.mzML results/peaks.csv" --out results/peaks.csv
 ```
 
 It is `declared` (nobody saw it run), inputs, code and parameters are still
-read from the command, and because the command is known, `package` puts it in
-`run.sh` and `check` can still replay-verify it.
+read from the command, and because the command is known, the package puts it
+in `run.sh` and `check` can still replay-verify it.
 
 ## Continuing in a later session
 
 The record is in the repository, so nothing is lost between conversations or
 agents. Start with `python3 analysis/whatran.py status` (or `open`) to see what
-is recorded, then carry on recording. To redo a step differently, record the
-new one with `--supersedes <old id>`. From the viewer, "Copy context for an
-agent" hands any node's exact inputs, code and parameters to the next session.
-Do not run two sessions that record the same project at the same time.
+is recorded, then carry on. From the viewer, "Copy context for an agent" hands
+any node's exact inputs, code and parameters to the next session. Do not run
+two sessions that record the same project at the same time.
 
 ## Finishing
 
-`done` compiles `analysis/graph.json`, re-checks every recorded file, drafts the
-package manifest, and lists anything unlinked. Then hand over to stage two:
-`package` generates the rerunnable package from the result path and `check`
-reruns it from clean (see the package-analysis skill). Tell the user how to open
-the graph: `python3 analysis/whatran.py open`.
+When the findings are ready, read `run.sh` (the recorded commands in order),
+add dependency installation if the steps need packages, and run
+`python3 analysis/whatran.py check`: it reruns the package from clean, compares
+the outputs with the committed ones and marks the steps replay-verified (see
+the package-analysis skill). Tell the user how to open the graph:
+`python3 analysis/whatran.py open`.
 
 When reporting results, give one line per claim with its supporting step, say
 how many steps are observed versus declared, and point to the graph. The graph

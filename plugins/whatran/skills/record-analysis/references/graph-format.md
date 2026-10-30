@@ -42,6 +42,9 @@ node type: two runs that use the same input are a branch.
   "git": {"commit": "3f1c…", "dirty": true},
   "verified_by_replay": false,
   "supersedes": "run-peak-detection-1",
+  "description": "Detect peaks with the stricter 15 ppm window",
+  "intent": "The 25 ppm window merged neighbouring features. Rerunning with 15 ppm.",
+  "auto": {"label_from": "description"},
   "recorded_at": "2026-10-14T18:03:40Z",
   "recorded_by": "claude-code"
 }
@@ -49,6 +52,11 @@ node type: two runs that use the same input are a branch.
 
 `status`: `completed` | `failed` | `rejected` | `superseded`.
 `evidence.level`: `observed` (a recorder saw it run) | `declared` (asserted).
+`description` and `intent` are the agent's own words about the command, copied
+from the execution (Claude Code: the Bash tool's description, and the last
+assistant text before the call). `auto` is present when the step was made from
+the execution without the agent naming it; `label_from` is `description`,
+`intent` or `command`.
 
 ## Artifact node
 
@@ -102,10 +110,19 @@ One JSON object per line, never rewritten:
 
 - `exec` - a command ran (written by hooks or `whatran.py run`): command, cwd,
   exit code, timing, output head, files changed under the watched directories
-  with their hashes.
-- `node` - a node declaration (artifact / run / claim).
+  with their hashes; from Claude Code also the agent's `description` of the
+  command and its `intent` (last words before the call).
+- `node` - a node declaration (artifact / run / claim), by the agent or derived
+  from an execution at the end of a turn.
 - `status` - a status change with a reason (reject, supersede).
-- `update` - amended label, note, params or status.
+- `update` - amended label, note, params, status, or evidence (an execution
+  attached to an existing run).
+- `retract` - a node removed from the graph; the ledger keeps it.
+- `replay` - a packaged path reran and passed its check.
+
+`analysis/report.md` is not part of the ledger: it is the agent's last message
+of the latest turn that did analysis work, kept so that what was said can be
+compared with what ran.
 
 Agents that cannot run `whatran.py` can emit a `graph.json` directly in this format;
 their runs are `declared` by construction.

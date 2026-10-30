@@ -26,8 +26,7 @@
     ".cache"
   ],
   "observe": {
-    "enabled": true,
-    "nudge": true
+    "enabled": true
   },
   "style": {
     "enabled": true,

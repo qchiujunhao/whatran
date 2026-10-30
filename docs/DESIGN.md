@@ -6,7 +6,7 @@ two stages that share one repository and one manifest.
 
 | stage | skill | runs when | leaves behind |
 | --- | --- | --- | --- |
-| record | `record-analysis` | during the analysis | `analysis/events.jsonl`, `analysis/graph.json`, `analysis/index.html` |
+| record | `record-analysis` | during the analysis | `analysis/events.jsonl`, `analysis/graph.json`, `analysis/report.md`, `analysis/index.html` |
 | package | `package-analysis` | when findings are reported | `whatran.json`, `run.sh`, `steps/`, `results/`, `check.py`, `build_site.py`, a CI workflow |
 
 ## Problem
@@ -42,19 +42,18 @@ git.
 
 Execution evidence (`exec` events) is written only by something that watched
 the command run: a hook, or the `whatran.py run` wrapper. Scientific meaning
-(`node` events) is declared by the agent with `whatran.py record "what it did"`.
-A run links the two. The agent cannot mint evidence and the recorder cannot know what a step
-means, so each stays within what it can know.
+(`node` events) is declared by the agent, or derived for it from the evidence
+and from its own words (below). A run links the two. The agent cannot mint
+evidence, and a derived step is marked as derived, so each record says how it
+came to be.
 
 Three ways to capture evidence, in decreasing strength:
 
 1. **Hooks** (Claude Code). Every Bash tool call is observed: `PreToolUse`
    records the start time, `PostToolUse` and `PostToolUseFailure` append the
    `exec` event. Hooks act only inside a project that has
-   `analysis/config.json`; elsewhere they exit immediately. When a command
-   changed files, the hook returns one line of context to the agent naming the
-   execution id and the changed files, so the agent can declare the step while
-   it still knows what the command was for.
+   `analysis/config.json`; elsewhere they exit immediately. The hook is silent
+   by default (`observe.nudge` turns on a one-line notice per captured command).
 2. **Wrapper**: `whatran.py run -- CMD` executes the command itself, snapshots
    the watched tree before and after, and appends the same `exec` event. This
    works in any agent or shell.
@@ -63,9 +62,64 @@ Three ways to capture evidence, in decreasing strength:
 
 File changes are detected by comparing modification time and size (wrapper:
 exact snapshot diff; hooks: files modified since the command started). Reads are
-not captured; the agent declares inputs and the recorder verifies they exist and
-hashes them. `outputs_observed` lists which declared outputs were actually seen
-changing with a matching hash.
+not captured; inputs are read off the command line (existing files it names)
+or declared, and the recorder verifies they exist and hashes them.
+`outputs_observed` lists which declared outputs were actually seen changing
+with a matching hash.
+
+### The agent's words
+
+A captured execution also carries what the agent said about it, when the agent
+runs in Claude Code: the one-line `description` it gave the command, and the
+`intent`, its last text before the call within the same turn, read from the
+session transcript and clipped to a few hundred characters. Only assistant
+text is read; the person's messages are never copied. Both are stored on the
+`exec` event and copied to the run that links it. `observe.intent` switches
+this off. This is the cheapest source of the "why" layer: words written before
+the command ran, bound to the execution that followed.
+
+### Steps without the agent's help
+
+At the end of every turn (and on `whatran.py done`), every captured execution
+that is not yet linked to a run becomes one, if it succeeded and produced
+result files. Files that are code or configuration do not count as results, so
+writing a script is not a step; commands that only move, copy, delete or
+install things are skipped; failed commands stay in the log unlinked.
+
+The label is taken, in order, from the command's description, from the intent
+(the last sentence that starts with an action, filler such as "now let me"
+removed, the verb normalised), or from the command (`Run detect_peaks.py`).
+The run records which source it came from (`auto.label_from`), and the viewer
+marks it, so an auto-named step is never mistaken for a named one. Inputs,
+outputs, code and parameters are read from the command as for `record`.
+
+Two cases are not new steps. An execution whose command equals a recorded
+run's command and whose changed files have the same content as recorded is a
+repeat: it is attached to that run. An execution that only regenerates files
+already in the record under some other command (a rerun of `run.sh`, for
+example) is left alone.
+
+A run that makes a result file that an earlier completed run made before
+supersedes that run, unless it reads that run's output as an input (a step
+that rewrites a table in place is a new step, not a redo). The same rule
+applies to steps the agent records itself. Rejecting a branch with a reason
+remains the agent's call; without it, the record still shows which attempt is
+current.
+
+### The end of a turn
+
+A `Stop` hook runs when the agent's turn ends: promote executions to steps,
+compile `graph.json`, write or refresh the package, and save the agent's last
+message as `analysis/report.md`. The report is replaced only when the turn did
+analysis work (the ledger grew) or when the message names a recorded file or
+step, so small talk does not overwrite it. The report is the agent's claim
+about the analysis; the graph is what ran. An auditor compares the two.
+
+Package files that whatran generates (`whatran.json`, `run.sh`) carry a
+fingerprint of their own content. While the file is exactly what whatran wrote
+it is regenerated as the record grows; once someone edits it, it is kept.
+`check.py`, `build_site.py` and the workflow are written only when missing.
+Nothing happens in a project where nothing has run.
 
 ### Nodes
 
@@ -158,13 +212,14 @@ method capture, or validity on new data. Subset runs must be labelled as such.
 
 ## How the stages join
 
-1. `whatran.py package` derives the package from `main_path`: input artifacts
-   become `inputs`, completed runs in topological order become `steps` (ids
-   derived from the run ids), result artifacts become `outputs` with a
-   comparison rule guessed from the file type. `run.sh` is the recorded
-   commands of those runs in order; `check.py`, `build_site.py` and the CI
-   workflow are written from copies embedded in `whatran.py`. Rejected and
-   superseded branches are excluded by construction. Existing files are kept.
+1. The package is derived from `main_path` (by the turn-end hook, `done`, or
+   `package`): input artifacts become `inputs`, completed runs in topological
+   order become `steps` (ids derived from the run ids), result artifacts become
+   `outputs` with a comparison rule guessed from the file type. `run.sh` is the
+   recorded commands of those runs in order; `check.py`, `build_site.py` and the
+   CI workflow are written from copies embedded in `whatran.py`. Rejected and
+   superseded branches are excluded by construction. Generated files are
+   refreshed until someone edits them; edited files are kept.
 2. `whatran.py check` moves the committed results aside, runs `run.sh`, runs
    `check.py` against the moved references, puts the references back whatever
    the outcome, and only on success appends a `replay` event naming the covered
@@ -182,7 +237,9 @@ obey writing rules modelled on Simplified Technical English (ASD-STE100): a step
 label starts with an approved verb and has at most 8 words; sentences in claims,
 notes and reasons have at most 20 words; no pronouns, hedging, intensifiers or
 passive voice; plain words over formal ones. The rules are checked when a record
-is written, and a refusal names the fix. The verb list is the project's own
+is written; a warning names the fix and the record is kept (`style.strict`
+refuses instead). Labels derived from the agent's words follow the rules when
+the words allow it. The verb list is the project's own
 (STE's dictionary is copyrighted): a built-in list written to STE's rules, which
 `analysis/config.json` can extend, replace from a file, or switch off.
 
@@ -200,13 +257,13 @@ shell has the same shape and the same evidence.
 
 ## The agent's interface
 
-Everything above is driven by a handful of commands, each needing one argument
-at most: `init`, `record "what it did"`, `claim "finding"`, `reject ID --reason`,
-`done`, `package`, `check`, `open`. `record` reads inputs, outputs, code and
-parameters from the captured command (files the command changed are outputs;
-script files it names are code; other existing files it names are inputs;
-`--key value` pairs are parameters) and prints what it inferred so the agent can
-override with flags. Everything else is an optional refinement.
+In Claude Code the agent runs `init` once and `check` at the end; everything
+between is captured and compiled without it. A handful of one-line commands
+refine the record and are optional: `claim "finding"`, `reject ID --reason`,
+`record "what it did"` (to name a step better than the derived label; inputs,
+outputs, code and parameters are read from the captured command), `update`,
+`open`. Agents without hooks run steps through `run -- CMD` and call `done`,
+which does what the turn-end hook does.
 
 ## Principles
 
@@ -229,8 +286,17 @@ override with flags. Everything else is an optional refinement.
   from the error on failure.
 - Files above `hash_max_bytes` (1 GiB by default) are not hashed and stay
   `unchecked`.
-- `graph.json` contains commands, parameters, paths and output heads. GitHub
+- `graph.json` contains commands, parameters, paths and output heads, and,
+  with the transcript features on, the agent's descriptions, intents and
+  report. These are the agent's words, not the person's, but they go into the
+  repository; `observe.intent` and `observe.report` switch them off. GitHub
   Pages is public even for private repositories; review before publishing.
+- Inference cannot tell a file that a command both reads and writes from an
+  output, so an in-place rewrite recorded automatically supersedes the earlier
+  step; recording it with `--in` keeps both. A label taken from the command
+  (`Run detect_peaks.py`) says what ran, not what it meant.
+- The Stop hook compiles and hashes the whole watched tree at the end of every
+  turn; narrow `watch` for large data directories.
 - Moving references aside prevents accidental reuse, not deliberate reuse by
   hostile analysis code. CI is automated rerun evidence, not an independent
   scientific judgment.

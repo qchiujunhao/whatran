@@ -47,5 +47,6 @@
       "path": "volcano.svg",
       "compare": "exists"
     }
-  ]
+  ],
+  "generated": "whatran 0.4.0 169de4243401"
 }

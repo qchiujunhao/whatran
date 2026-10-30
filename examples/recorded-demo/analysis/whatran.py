@@ -54,7 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 FORMAT = "analysis-graph/0.1"
 
 AG_DIRNAME = "analysis"
@@ -87,7 +87,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "hash_max_bytes": 1 << 30,
     "observe": {
         "enabled": True,
-        "nudge": True,
+        "nudge": False,          # one line of context to the agent after each captured command
+        "intent": True,          # keep the agent's own words before each command (Claude Code transcript)
+        "intent_chars": 300,
+        "report": True,          # keep the agent's last message of a turn as analysis/report.md
         "ignore_commands": [
             "ls", "ll", "cat", "head", "tail", "pwd", "echo", "printf", "which",
             "type", "wc", "grep", "rg", "egrep", "fgrep", "find", "fd", "tree",
@@ -258,6 +261,120 @@ def is_ignored_command(command: str, config: Dict[str, Any]) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# the agent's own words: read from a Claude Code transcript (JSONL), never from
+# the user's messages. Only assistant text is used.
+# --------------------------------------------------------------------------- #
+
+TRANSCRIPT_TAIL_BYTES = 6 << 20
+
+
+def transcript_entries(path: Any, max_bytes: int = TRANSCRIPT_TAIL_BYTES) -> List[Dict[str, Any]]:
+    """The last entries of a transcript that are user or assistant messages, in order."""
+    try:
+        tp = Path(path)
+        size = tp.stat().st_size
+        with open(tp, "rb") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+                fh.readline()                      # drop the partial first line
+            raw = fh.read().decode("utf-8", errors="replace")
+    except (OSError, TypeError, ValueError):
+        return []
+    out: List[Dict[str, Any]] = []
+    for line in raw.splitlines():
+        if '"type":"assistant"' not in line and '"type":"user"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("type") in ("user", "assistant") and isinstance(d.get("message"), dict):
+            out.append(d)
+    return out
+
+
+def _blocks(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    content = entry.get("message", {}).get("content")
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return [b for b in (content or []) if isinstance(b, dict)]
+
+
+def _is_prompt(entry: Dict[str, Any]) -> bool:
+    """A user entry that is a message from the person (not a tool result)."""
+    return entry.get("type") == "user" and not any(b.get("type") == "tool_result" for b in _blocks(entry))
+
+
+def _text_of(entry: Dict[str, Any], before_tool_use: Optional[str] = None) -> str:
+    parts: List[str] = []
+    for b in _blocks(entry):
+        if before_tool_use and b.get("type") == "tool_use" and b.get("id") == before_tool_use:
+            break
+        if b.get("type") == "text" and b.get("text"):
+            parts.append(str(b["text"]))
+    return "\n".join(parts).strip()
+
+
+def clip_tail(text: str, max_chars: int) -> str:
+    """The last max_chars of text, cut at a sentence or line boundary when one is near."""
+    text = re.sub(r"[ \t]+", " ", text.strip())
+    if len(text) <= max_chars:
+        return text
+    tail = text[-max_chars:]
+    m = re.search(r"(?:(?<=[.!?。！？])\s+|\n)", tail[: max(1, len(tail) // 2)])
+    if m:
+        tail = tail[m.end():]
+    return tail.strip()
+
+
+def intent_before_tool_use(path: Any, tool_use_id: str, max_chars: int = 300) -> Optional[str]:
+    """What the assistant said last before calling this tool, within the same turn."""
+    if not path or not tool_use_id:
+        return None
+    entries = transcript_entries(path)
+    idx = None
+    for i in range(len(entries) - 1, -1, -1):
+        e = entries[i]
+        if e.get("type") == "assistant" and any(b.get("type") == "tool_use" and b.get("id") == tool_use_id for b in _blocks(e)):
+            idx = i
+            break
+    if idx is None:
+        return None
+    text = _text_of(entries[idx], before_tool_use=tool_use_id)
+    msg_id = entries[idx].get("message", {}).get("id")
+    j = idx - 1
+    while not text and j >= 0:
+        e = entries[j]
+        if _is_prompt(e):
+            break
+        if e.get("type") == "assistant":
+            same_message = msg_id and e.get("message", {}).get("id") == msg_id
+            text = _text_of(e)
+            if not text and not same_message and any(b.get("type") == "tool_use" for b in _blocks(e)):
+                pass                                   # an earlier tool call without words: keep looking back
+        j -= 1
+    return clip_tail(text, max_chars) if text else None
+
+
+def last_assistant_text(path: Any, max_chars: int = 20000) -> Optional[str]:
+    """The assistant's final words of the last turn: text after its last tool call."""
+    entries = [e for e in transcript_entries(path) if not e.get("isSidechain")]
+    parts: List[str] = []
+    for e in reversed(entries):
+        if e.get("type") == "user":
+            break
+        if any(b.get("type") == "tool_use" for b in _blocks(e)):
+            break
+        t = _text_of(e)
+        if t:
+            parts.append(t)
+    if not parts:
+        return None
+    text = "\n\n".join(reversed(parts)).strip()
+    return text[-max_chars:] if len(text) > max_chars else text
+
+
+# --------------------------------------------------------------------------- #
 # project
 # --------------------------------------------------------------------------- #
 
@@ -421,7 +538,8 @@ class Project:
                         files_changed: Optional[List[Dict[str, Any]]] = None,
                         truncated: bool = False, session: Optional[str] = None,
                         tool_use_id: Optional[str] = None, interrupted: bool = False,
-                        events: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                        events: Optional[List[Dict[str, Any]]] = None,
+                        description: Optional[str] = None, intent: Optional[str] = None) -> Dict[str, Any]:
         head = int(self.config["observe"].get("stdout_head_bytes", 2000))
         ev: Dict[str, Any] = {
             "event": "exec",
@@ -444,6 +562,10 @@ class Project:
             ev["session"] = session
         if tool_use_id:
             ev["tool_use_id"] = tool_use_id
+        if description:
+            ev["description"] = str(description).strip()[:200]
+        if intent:
+            ev["intent"] = intent
         return ev
 
     def integrity(self, node: Dict[str, Any]) -> str:
@@ -687,8 +809,8 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
                params: Dict[str, Any], command: Optional[str], evidence_mode: str,
                note: Optional[str], status: str, supersedes: Optional[str],
                node_id: Optional[str] = None, exec_event: Optional[Dict[str, Any]] = None,
-               infer: bool = True, style: Optional[bool] = None) -> Dict[str, Any]:
-    enforce_style(p, label=label, sentences={"note": note}, enabled=style)
+               infer: bool = True, style: Optional[bool] = None, auto: Optional[str] = None) -> Dict[str, Any]:
+    warnings: List[str] = enforce_style(p, label=label, sentences={"note": note}, enabled=style)
     events = p.events()
     nodes = fold_nodes(events)
     rel_in = [p.rel(x) for x in inputs]
@@ -696,7 +818,6 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
     rel_code = [p.rel(x) for x in code]
     params = dict(params or {})
     new_nodes: List[Dict[str, Any]] = []
-    warnings: List[str] = []
 
     ev = exec_event or resolve_evidence(events, nodes, evidence_mode, rel_out, rel_code, command)
 
@@ -720,6 +841,12 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
         if not params and guess["params"]:
             params = guess["params"]
             inferred["params"] = params
+
+    if supersedes is None and rel_out:
+        # the same result file made again by a different attempt: the earlier attempt is superseded
+        supersedes = detect_superseded_run(nodes, rel_out, rel_in)
+        if supersedes:
+            inferred["supersedes"] = supersedes
 
     input_ids: List[str] = []
     for r in rel_in:
@@ -809,6 +936,12 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
         run["note"] = note
     if supersedes:
         run["supersedes"] = supersedes
+    if ev is not None:
+        for key in ("description", "intent"):
+            if ev.get(key):
+                run[key] = ev[key]
+    if auto:
+        run["auto"] = {"label_from": auto}
 
     for n in new_nodes:
         p.append({"event": "node", "node": n})
@@ -819,7 +952,7 @@ def record_run(p: Project, label: str, *, inputs: List[str], outputs: List[str],
     return {"id": rid, "evidence": evidence["level"], "exec_ids": evidence["exec_ids"],
             "inputs": input_ids, "outputs": output_ids, "status": status, "warnings": warnings,
             "inferred": inferred, "paths": {"inputs": rel_in, "outputs": rel_out, "code": rel_code},
-            "params": params}
+            "params": params, "supersedes": supersedes}
 
 
 def resolve_support(p: Project, nodes: "OrderedDict[str, Dict[str, Any]]", ref: str) -> str:
@@ -835,7 +968,7 @@ def resolve_support(p: Project, nodes: "OrderedDict[str, Dict[str, Any]]", ref: 
 
 def record_claim(p: Project, text: str, supports: List[str], status: str, note: Optional[str],
                  node_id: Optional[str] = None, style: Optional[bool] = None) -> Dict[str, Any]:
-    enforce_style(p, sentences={"claim": text, "note": note}, enabled=style)
+    warnings = enforce_style(p, sentences={"claim": text, "note": note}, enabled=style)
     events = p.events()
     nodes = fold_nodes(events)
     ids = [resolve_support(p, nodes, s) for s in supports]
@@ -863,8 +996,243 @@ def record_claim(p: Project, text: str, supports: List[str], status: str, note: 
     if note:
         claim["note"] = note
     p.append({"event": "node", "node": claim})
-    warnings = [] if ids else ["claim has no supporting evidence; add --supports <run id | artifact path>"]
+    if not ids:
+        warnings.append("claim has no supporting evidence; add --supports <run id | artifact path>")
     return {"id": cid, "supported_by": ids, "auto_supports": auto, "warnings": warnings}
+
+
+def detect_superseded_run(nodes: "OrderedDict[str, Dict[str, Any]]", rel_out: List[str],
+                          rel_in: List[str]) -> Optional[str]:
+    """The completed run that last produced one of these output paths, if this run redoes it.
+
+    A run that reads an earlier result and rewrites the same file is a new step, not a redo,
+    so a candidate whose output is among this run's inputs is left alone.
+    """
+    art_by_path: Dict[str, Dict[str, Any]] = {}
+    for n in nodes.values():
+        if n.get("type") == "artifact" and n.get("path"):
+            art_by_path[n["path"]] = n
+    gen_by: Dict[str, str] = {}
+    for n in nodes.values():
+        if n.get("type") == "run" and n.get("status") == "completed":
+            for o in n.get("outputs") or []:
+                gen_by[o] = n["id"]
+    ins = set(rel_in)
+    counts: Dict[str, int] = {}
+    for path in rel_out:
+        a = art_by_path.get(path)
+        rid = gen_by.get(a["id"]) if a else None
+        if rid:
+            counts[rid] = counts.get(rid, 0) + 1
+    best: Optional[str] = None
+    for rid, c in counts.items():
+        old = nodes[rid]
+        if any((nodes.get(o) or {}).get("path") in ins for o in old.get("outputs") or []):
+            continue
+        if best is None or c > counts[best]:
+            best = rid
+    return best
+
+
+# --------------------------------------------------------------------------- #
+# automatic steps: a captured execution that produced result files becomes a run
+# without the agent doing anything; the label comes from the agent's own words
+# when it has them (the command's description, else what it said before running
+# it), else from the command.
+# --------------------------------------------------------------------------- #
+
+HOUSEKEEPING_COMMANDS = {
+    "mkdir", "mv", "rm", "touch", "chmod", "chown", "ln", "cp", "rsync", "tar", "zip", "unzip",
+    "gzip", "gunzip", "git", "pip", "pip3", "conda", "mamba", "npm", "npx", "uv", "brew", "apt", "apt-get",
+}
+AUTHORING_SUFFIXES = SCRIPT_SUFFIXES + (".md", ".toml", ".yml", ".yaml", ".cfg", ".ini", ".lock")
+AUTHORING_NAMES = {"requirements.txt", ".gitignore", "environment.yml", "Makefile", "LICENSE", "Dockerfile"}
+
+_TRAILING = {"and", "then", "or", "the", "a", "an", "to", "with", "of", "for", "in", "on", "by", "from", "into"}
+_FILLER = re.compile(
+    r"^(?:now|next|then|first|second|finally|also|ok|okay|and|so|but|good|great|"
+    r"let me|let's|lets|i'll|i will|i'm going to|i am going to|we'll|we will|going to|time to|"
+    r"try to|need to|want to|will|to)\b[\s,:.\-]*", re.I)
+
+
+def _command_names(command: str) -> List[str]:
+    names: List[str] = []
+    for seg in re.split(r"\s*(?:&&|\|\||;|\|)\s*", command.strip()):
+        try:
+            toks = shlex.split(seg)
+        except ValueError:
+            toks = seg.split()
+        toks = [t for t in toks if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t)]
+        if toks:
+            names.append(os.path.basename(toks[0]))
+    return names
+
+
+def result_files(ev: Dict[str, Any]) -> List[str]:
+    """Changed files that look like results rather than code or configuration."""
+    out: List[str] = []
+    for f in ev.get("files_changed") or []:
+        path = f.get("path") or ""
+        if os.path.basename(path) in AUTHORING_NAMES or path.lower().endswith(AUTHORING_SUFFIXES):
+            continue
+        out.append(path)
+    return out
+
+
+def is_step_candidate(ev: Dict[str, Any]) -> bool:
+    """An execution that could be a scientific step: it succeeded and produced result files."""
+    if ev.get("exit_code") not in (0, None) or ev.get("interrupted"):
+        return False
+    cmd = ev.get("command") or ""
+    names = _command_names(cmd)
+    if not names or all(n in HOUSEKEEPING_COMMANDS for n in names):
+        return False
+    return bool(result_files(ev))
+
+
+def _verb_form(word: str, verbs: set) -> Optional[str]:
+    """running -> run, detects -> detect, fitted -> fit; None when no approved verb fits."""
+    w = _norm(word)
+    if not w:
+        return None
+    if w in verbs:
+        return w
+    cands: List[str] = []
+    if w.endswith("ing") and len(w) > 4:
+        stem = w[:-3]
+        cands += [stem, stem + "e"]
+        if len(stem) > 2 and stem[-1] == stem[-2]:
+            cands.append(stem[:-1])
+    if w.endswith("es"):
+        cands.append(w[:-2])
+    if w.endswith("s"):
+        cands.append(w[:-1])
+    if w.endswith("ed") and len(w) > 3:
+        cands += [w[:-2], w[:-1]]
+        if len(w) > 4 and w[-3] == w[-4]:
+            cands.append(w[:-3])
+    for c in cands:
+        if len(c) > 1 and c in verbs:
+            return c
+    return None
+
+
+def label_from_words(text: str, p: Optional[Project], max_words: int = 8) -> Optional[str]:
+    """A verb-first label from the agent's words: the last sentence that starts with an action."""
+    t = re.sub(r"```.*?```", " ", text or "", flags=re.S)
+    t = re.sub(r"[`*_#>\[\]()\"]+", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t:
+        return None
+    verbs = approved_verbs(p)
+    sentences = [x for x in re.split(r"(?<=[.!?:;。！？：；])\s*", t) if x.strip()]
+    for sent in reversed(sentences):
+        s2 = sent.strip()
+        for _ in range(4):
+            s3 = _FILLER.sub("", s2).strip()
+            if s3 == s2:
+                break
+            s2 = s3
+        words = s2.split()
+        if not words:
+            continue
+        v = _verb_form(words[0], verbs)
+        if not v:
+            continue
+        rest = words[1:max_words]
+        while rest and _norm(rest[-1]) in _TRAILING:
+            rest.pop()
+        return " ".join([v.capitalize()] + rest).rstrip(".,:;!。，：；！")
+    return None
+
+
+def label_from_command(p: Project, ev: Dict[str, Any]) -> str:
+    guess = infer_from_exec(p, ev)
+    if guess["code"]:
+        return f"Run {os.path.basename(guess['code'][0])}"
+    names = [n for n in _command_names(ev.get("command") or "") if n not in HOUSEKEEPING_COMMANDS]
+    return f"Run {names[0]}" if names else "Run command"
+
+
+def auto_label(p: Project, ev: Dict[str, Any]) -> Tuple[str, str]:
+    """(label, where it came from): description | intent | command."""
+    desc = (ev.get("description") or "").strip()
+    if desc:
+        label = label_from_words(desc, p) or " ".join(desc.split()[:8]).rstrip(".")
+        return label[:1].upper() + label[1:], "description"
+    intent = (ev.get("intent") or "").strip()
+    if intent:
+        label = label_from_words(intent, p)
+        if label:
+            return label, "intent"
+    return label_from_command(p, ev), "command"
+
+
+def identical_rerun_of(nodes: "OrderedDict[str, Dict[str, Any]]", ev: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A completed run with the same command whose outputs this execution reproduced byte for byte."""
+    cmd = (ev.get("command") or "").strip()
+    files = ev.get("files_changed") or []
+    if not cmd or not files:
+        return None
+    art_by_path = {n["path"]: n for n in nodes.values() if n.get("type") == "artifact" and n.get("path")}
+    for f in files:
+        a = art_by_path.get(f.get("path"))
+        if a is None or not f.get("sha256") or a.get("sha256") != f["sha256"]:
+            return None
+    for n in reversed(list(nodes.values())):
+        if n.get("type") == "run" and n.get("status") == "completed" and (n.get("command") or "").strip() == cmd:
+            return n
+    return None
+
+
+def reproduces_known_files(nodes: "OrderedDict[str, Dict[str, Any]]", ev: Dict[str, Any]) -> bool:
+    """Every file it changed already exists in the record with the same content (a replay, not a step)."""
+    files = ev.get("files_changed") or []
+    if not files:
+        return False
+    art_by_path = {n["path"]: n for n in nodes.values() if n.get("type") == "artifact" and n.get("path")}
+    for f in files:
+        a = art_by_path.get(f.get("path"))
+        if a is None or not f.get("sha256") or a.get("sha256") != f["sha256"]:
+            return False
+    return True
+
+
+def promote_executions(p: Project) -> List[Dict[str, Any]]:
+    """Make a run out of every unlinked execution that produced result files. Idempotent.
+
+    An execution that repeats a recorded run exactly (same command, same output bytes) is
+    attached to that run. One that only regenerates files already in the record (a rerun of
+    the whole pipeline, for example) is left alone.
+    """
+    events = p.events()
+    nodes = fold_nodes(events)
+    linked = linked_exec_ids(nodes)
+    out: List[Dict[str, Any]] = []
+    for ev in exec_events(events):
+        if ev["id"] in linked or not is_step_candidate(ev):
+            continue
+        twin = identical_rerun_of(nodes, ev)
+        if twin is not None:
+            evidence = dict(twin.get("evidence") or {})
+            evidence["exec_ids"] = list(evidence.get("exec_ids") or []) + [ev["id"]]
+            p.append({"event": "update", "id": twin["id"], "fields": {"evidence": evidence}})
+            twin["evidence"] = evidence
+            linked[ev["id"]] = twin["id"]
+            out.append({"exec": ev["id"], "run": twin["id"], "repeat": True})
+            continue
+        if reproduces_known_files(nodes, ev):
+            continue
+        label, source = auto_label(p, ev)
+        res = record_run(p, label, inputs=[], outputs=[], code=[], params={}, command=None,
+                         evidence_mode=ev["id"], note=None, status="completed", supersedes=None,
+                         exec_event=ev, infer=True, style=False, auto=source)
+        out.append({"exec": ev["id"], "run": res["id"], "label": label, "label_from": source,
+                    "supersedes": res.get("supersedes")})
+        events = p.events()
+        nodes = fold_nodes(events)
+        linked = linked_exec_ids(nodes)
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -1098,7 +1466,7 @@ def export_package(p: Project, graph: Dict[str, Any]) -> Dict[str, Any]:
             outputs.append({"path": rel, "compare": "exact"})
         else:
             outputs.append({"path": rel, "compare": "exists"})
-    claims = [nodes[c]["label"] for c in main if nodes[c]["type"] == "claim"]
+    claims = [nodes[c]["label"] for c in graph["main_path"] if nodes[c]["type"] == "claim"]   # ledger order
     return {
         "method": {
             "title": p.config.get("project", {}).get("name") or p.root.name,
@@ -1825,6 +2193,7 @@ footer b { color: var(--ink); font-weight: 600; }
     const chips = [];
     if (n.status) chips.push(`<span class="chip ${n.status === 'rejected' || n.status === 'failed' ? 'warn' : ''}">${esc(n.status)}</span>`);
     if (n.type === 'run') { const lvl = (n.evidence && n.evidence.level) || 'declared'; chips.push(`<span class="chip ${lvl === 'observed' ? 'ok' : 'warn'}">${lvl === 'observed' ? 'execution observed' : 'declared only'}</span>`); chips.push(`<span class="chip ${n.verified_by_replay ? 'ok' : ''}">${n.verified_by_replay ? 'replay verified' : 'not replay-verified'}</span>`); }
+    if (n.type === 'run' && n.auto) chips.push(`<span class="chip">auto-recorded · label from the ${esc(n.auto.label_from || 'command')}</span>`);
     if (n.type === 'artifact') chips.push(`<span class="chip ${n.integrity === 'intact' ? 'ok' : n.integrity === 'missing' ? 'bad' : n.integrity === 'modified' ? 'warn' : ''}">${esc(n.integrity || 'unchecked')}</span>`);
     if (!state.graph.main_path.includes(n.id)) chips.push(`<span class="chip">not on the result path</span>`);
     parts.push(`<div class="chips" style="margin-top:8px">${chips.join('')}</div>`);
@@ -1832,6 +2201,7 @@ footer b { color: var(--ink); font-weight: 600; }
     if (n.note) parts.push(`<p style="margin:10px 0 0">${esc(n.note)}</p>`);
 
     if (n.type === 'run') {
+      if (n.description || n.intent) parts.push(`<h3>What the agent said</h3>${n.description ? `<p style="margin:6px 0 0">${esc(n.description)}</p>` : ''}${n.intent ? `<p style="margin:6px 0 0;color:var(--muted)">${esc(n.intent)}</p>` : ''}`);
       if (n.command) parts.push(`<h3>Command</h3><pre>${esc(n.command)}</pre>`);
       const params = Object.entries(n.params || {});
       if (params.length) parts.push(`<h3>Parameters</h3><table>${params.map(([k, v]) => row(k, `<code>${esc(typeof v === 'object' ? JSON.stringify(v) : v)}</code>`)).join('')}</table>`);
@@ -1878,6 +2248,7 @@ footer b { color: var(--ink); font-weight: 600; }
     L.push(`# Analysis Graph node: ${n.label || n.id} (${n.id})`);
     L.push(`type: ${n.type}${n.status ? '  status: ' + n.status : ''}`);
     if (n.type === 'run') {
+      if (n.description) L.push(`agent said: ${n.description}`);
       if (n.command) L.push(`command: ${n.command}`);
       (n.code || []).forEach((c) => L.push(`code: ${c.path} (sha256 ${short(c.sha256)})`));
       const p = fmtParams(n.params); if (p) L.push(`params: ${p}`);
@@ -1991,6 +2362,7 @@ PREFERRED_WORDS = {
 
 STYLE_DEFAULT: Dict[str, Any] = {
     "enabled": True,
+    "strict": False,      # True: a record that breaks the rules is refused instead of warned about
     "max_label_words": 8,
     "max_sentence_words": 20,
     "verbs": [],          # extra approved verbs for this project
@@ -2106,20 +2478,36 @@ def style_enabled(p: Optional["Project"], override: Optional[bool] = None) -> bo
     return bool(cfg.get("enabled", True))
 
 
+def style_strict(p: Optional["Project"]) -> bool:
+    if os.environ.get("WHATRAN_STYLE_STRICT"):
+        return True
+    cfg = dict(STYLE_DEFAULT)
+    if p is not None:
+        cfg.update(p.config.get("style") or {})
+    return bool(cfg.get("strict", False))
+
+
 def enforce_style(p: Optional["Project"], *, label: Optional[str] = None, sentences: Optional[Dict[str, Optional[str]]] = None,
-                  enabled: Optional[bool] = None) -> None:
-    """Raise StyleError listing every problem, or return silently."""
+                  enabled: Optional[bool] = None) -> List[str]:
+    """The writing-rule problems of a record, as warnings ("style: ..."). The record is
+    still accepted; with style.strict (or WHATRAN_STYLE_STRICT=1) it is refused instead."""
     if not style_enabled(p, enabled):
-        return
+        return []
     problems: List[str] = []
     if label is not None:
         problems += [f'label "{label}": {x}' for x in check_label(label, p)]
     for what, text in (sentences or {}).items():
         if text:
             problems += [f"{what}: {x}" for x in check_sentences(text, p, what)]
-    if problems:
+    if problems and style_strict(p):
         raise StyleError("the record does not follow the writing rules (short, verb-first, no hedging; "
                          "--no-style or WHATRAN_NO_STYLE=1 to bypass):\n  - " + "\n  - ".join(problems))
+    return [f"style: {x}" for x in problems]
+
+
+def _warn(problems: List[str]) -> None:
+    for x in problems:
+        sys.stderr.write(f"whatran: {x}\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -2128,11 +2516,12 @@ def enforce_style(p: Optional["Project"], *, label: Optional[str] = None, senten
 
 def begin_step(p: Project, label: str, *, code: Optional[List[str]] = None, note: Optional[str] = None,
                style: Optional[bool] = None) -> str:
-    enforce_style(p, label=label, sentences={"note": note}, enabled=style)
+    problems = enforce_style(p, label=label, sentences={"note": note}, enabled=style)
     p.state_dir.mkdir(parents=True, exist_ok=True)
     token = f"s-{int(time.time() * 1000):x}-{os.getpid():x}"
     state = {
         "label": label,
+        "style_warnings": problems,
         "started": time.time(),
         "cwd": os.getcwd(),
         "code": [p.rel(c) for c in (code or [])],
@@ -2154,7 +2543,9 @@ def end_step(p: Project, token: str, *, inputs: Optional[List[str]] = None, outp
     files, truncated = p.changed_since_snapshot(before)
     ended = time.time()
     note = note or state.get("note")
-    enforce_style(p, sentences={"note": note}, enabled=style)
+    problems = list(state.get("style_warnings") or [])
+    if note and note != state.get("note"):
+        problems += enforce_style(p, sentences={"note": note}, enabled=style)
     ev = p.make_exec_event(None, source="step", exit_code=0 if status == "completed" else 1,
                            started=state["started"], ended=ended, cwd=state.get("cwd"),
                            files_changed=files, truncated=truncated)
@@ -2164,6 +2555,7 @@ def end_step(p: Project, token: str, *, inputs: Optional[List[str]] = None, outp
                      code=code or state.get("code") or [], params=params or {}, command=None,
                      evidence_mode=ev["id"], note=note, status=status, supersedes=supersedes, exec_event=ev,
                      style=False)
+    res["warnings"] = problems + res["warnings"]
     try:
         sf.unlink()
     except OSError:
@@ -2221,6 +2613,7 @@ def record(label: str, *, inputs: Any = (), outputs: Any = (), code: Any = (), p
     res = record_run(p, label, inputs=list(_strs(inputs)), outputs=list(_strs(outputs)), code=list(_strs(code)),
                      params=params or {}, command=command, evidence_mode=evidence, note=note, status="completed",
                      supersedes=_id(supersedes) if supersedes else None, infer=infer, style=style)
+    _warn(res["warnings"])
     return res["id"]
 
 
@@ -2281,6 +2674,7 @@ class step:
                                params=params, status="failed" if exc_type else "completed",
                                supersedes=self.supersedes, style=self.style)
         self.id = self.result["id"]
+        _warn(self.result["warnings"])
         return False
 
     def __call__(self, fn):
@@ -2331,13 +2725,14 @@ def claim(text: str, supports: Any = (), note: Optional[str] = None, style: Opti
     sup = [str(_id(s)) for s in (supports if not isinstance(supports, (str, os.PathLike)) and supports is not None else [supports])]
     sup = [s for s in sup if s and s != "None"]
     res = record_claim(p, text, sup, "tentative", note, style=style)
+    _warn(res["warnings"])
     return res["id"]
 
 
 def reject(node: Any, reason: str, style: Optional[bool] = None) -> None:
     """Abandon a run or claim with a reason. It stays in the record, hidden from the result path."""
     p = _project()
-    enforce_style(p, sentences={"reason": reason}, enabled=style)
+    _warn(enforce_style(p, sentences={"reason": reason}, enabled=style))
     nodes = fold_nodes(p.events())
     nid = _id(node)
     if nid not in nodes:
@@ -2354,9 +2749,9 @@ def edit(node: Any, *, label: Optional[str] = None, note: Optional[str] = None, 
     if nid not in nodes:
         raise AgError(f"unknown node {nid}")
     n = nodes[nid]
-    enforce_style(p, label=label if (label is not None and n.get("type") == "run") else None,
-                  sentences={"note": note, "label": label if (label is not None and n.get("type") == "claim") else None},
-                  enabled=style)
+    _warn(enforce_style(p, label=label if (label is not None and n.get("type") == "run") else None,
+                        sentences={"note": note, "label": label if (label is not None and n.get("type") == "claim") else None},
+                        enabled=style))
     fields: Dict[str, Any] = {}
     if label is not None:
         fields["label"] = label
@@ -2452,7 +2847,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         "project": {"name": args.name or root.name, "description": args.description or ""},
         "watch": ["."],
         "exclude": DEFAULT_CONFIG["exclude"],
-        "observe": {"enabled": True, "nudge": True},
+        "observe": {"enabled": True},
         "style": {"enabled": True, "verbs": []},
     }
     (ag_dir / CONFIG_NAME).write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
@@ -2472,8 +2867,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"initialised {ag_dir}")
     for c in copied:
         print(f"  copied {c.relative_to(root)}")
-    print("recording is on. after each meaningful step: python3 analysis/whatran.py record \"<Verb> <object>\"  e.g. \"Detect peaks\"")
-    print("(outside Claude Code, run steps as: python3 analysis/whatran.py run -- CMD). finish with: done")
+    print("recording is on. Claude Code: nothing else to do; every command is captured and each turn ends with the graph and package refreshed.")
+    print("elsewhere: run steps as `python3 analysis/whatran.py run -- CMD`, finish with `done`. optional: claim \"<finding>\", reject <id> --reason")
     return 0
 
 
@@ -2563,7 +2958,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise AgError("nothing to run: whatran.py run [options] -- COMMAND ...")
     cmd_str = cmd[0] if len(cmd) == 1 else shlex.join(cmd)
     if args.label:
-        enforce_style(p, label=args.label, sentences={"note": args.note}, enabled=False if args.no_style else None)
+        _warn(enforce_style(p, label=args.label, sentences={"note": args.note}, enabled=False if args.no_style else None))
     events = p.events()
     before = p.snapshot()
     started = time.time()
@@ -2604,9 +2999,11 @@ def cmd_reject(args: argparse.Namespace) -> int:
         raise AgError(f"unknown node {args.id}")
     if nodes[args.id].get("type") == "artifact":
         raise AgError("artifacts cannot be rejected; reject the run that produced them")
-    enforce_style(p, sentences={"reason": args.reason}, enabled=False if args.no_style else None)
+    problems = enforce_style(p, sentences={"reason": args.reason}, enabled=False if args.no_style else None)
     p.append({"event": "status", "id": args.id, "status": "rejected", "reason": args.reason})
     print(f"{args.id} marked rejected (kept in the record): {args.reason}")
+    for x in problems:
+        print(f"  warning: {x}")
     return 0
 
 
@@ -2617,9 +3014,9 @@ def cmd_update(args: argparse.Namespace) -> int:
         raise AgError(f"unknown node {args.id}")
     fields: Dict[str, Any] = {}
     t = nodes[args.id].get("type")
-    enforce_style(p, label=args.label if (args.label and t == "run") else None,
-                  sentences={"note": args.note, "label": args.label if (args.label and t == "claim") else None},
-                  enabled=False if args.no_style else None)
+    problems = enforce_style(p, label=args.label if (args.label and t == "run") else None,
+                             sentences={"note": args.note, "label": args.label if (args.label and t == "claim") else None},
+                             enabled=False if args.no_style else None)
     if args.label:
         fields["label"] = args.label
     if args.note:
@@ -2639,6 +3036,8 @@ def cmd_update(args: argparse.Namespace) -> int:
         raise AgError("nothing to update")
     p.append({"event": "update", "id": args.id, "fields": fields})
     print(f"updated {args.id}: {', '.join(fields)}")
+    for x in problems:
+        print(f"  warning: {x}")
     return 0
 
 
@@ -2727,21 +3126,30 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_done(args: argparse.Namespace) -> int:
-    """compile + verify + package draft, then say what to do next."""
+    """What the Stop hook does at the end of every turn, for agents without hooks:
+    promote executions to steps, compile, verify files, write the package."""
     p = require_project(args)
-    graph = build_graph(p, verify=True)
-    write_graph(p, graph)
-    draft = export_package(p, graph)
-    (p.ag_dir / "whatran.draft.json").write_text(json.dumps(draft, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    res = finish(p, package=not args.no_package)
+    graph = res["graph"]
+    for item in res["promoted"]:
+        if item.get("repeat"):
+            print(f"attached {item['exec']} to {item['run']} (same command, same outputs)")
+        else:
+            extra = f"; supersedes {item['supersedes']}" if item.get("supersedes") else ""
+            print(f"recorded {item['run']}  \"{item['label']}\"  (label from the {item['label_from']}{extra})")
     print_summary(p, graph)
     s = graph["summary"]
-    print(f"wrote {p.graph_path.relative_to(p.root)} and analysis/whatran.draft.json")
+    print(f"wrote {p.graph_path.relative_to(p.root)}")
+    pkg = res["package"]
+    for rel in pkg["written"]:
+        print(f"wrote {rel}")
     if s["artifacts"]["modified"] or s["artifacts"]["missing"]:
         print("warning: some recorded files changed or vanished since they were recorded (see above)")
     if s["claims"]["total"] == 0:
         print("no claims yet: whatran.py claim \"<finding>\" marks what the result path leads to")
     print(f"open the graph:      python3 {AG_DIRNAME}/whatran.py open")
-    print(f"package the result:  python3 {AG_DIRNAME}/whatran.py package   (then `check`)")
+    if not pkg["empty"]:
+        print(f"verify it reruns:    python3 {AG_DIRNAME}/whatran.py check   (read run.sh first; add dependency installation if needed)")
     return 0
 
 
@@ -2903,47 +3311,170 @@ def make_readme(manifest: Dict[str, Any]) -> str:
     )
 
 
-def cmd_package(args: argparse.Namespace) -> int:
-    p = require_project(args)
-    graph = build_graph(p, verify=True)
-    write_graph(p, graph)
-    manifest_path = p.root / PACKAGE_MANIFEST
-    if manifest_path.is_file() and not args.force:
-        manifest = load_manifest(p)
-    else:
-        manifest = export_package(p, graph)
-    if not manifest.get("steps"):
-        raise AgError("nothing to package: no completed runs on the result path (record steps first, then `done`)")
-    written: List[str] = []
-    skipped: List[str] = []
+# --------------------------------------------------------------------------- #
+# generated files carry a fingerprint of their own content, so that a file nobody
+# edited is refreshed as the record grows and an edited one is left alone.
+# --------------------------------------------------------------------------- #
 
-    def put(rel: str, content: str, executable: bool = False) -> None:
+GENERATED_KEY = "generated"
+_RUN_SH_MARK = re.compile(r"^# generated: whatran \S+ ([0-9a-f]{12})\n", re.M)
+
+
+def _fingerprint(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _manifest_body(manifest: Dict[str, Any]) -> str:
+    return json.dumps({k: v for k, v in manifest.items() if k != GENERATED_KEY}, sort_keys=True, ensure_ascii=False)
+
+
+def stamp_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
+    manifest[GENERATED_KEY] = f"whatran {__version__} {_fingerprint(_manifest_body(manifest))}"
+    return manifest
+
+
+def manifest_is_generated(manifest: Dict[str, Any]) -> bool:
+    """True when the manifest is exactly what whatran wrote (nobody edited it)."""
+    g = manifest.get(GENERATED_KEY)
+    return isinstance(g, str) and g.rsplit(" ", 1)[-1] == _fingerprint(_manifest_body(manifest))
+
+
+def stamp_run_sh(text: str) -> str:
+    body = _RUN_SH_MARK.sub("", text, count=1)
+    first, nl, rest = body.partition("\n")
+    return f"{first}{nl}# generated: whatran {__version__} {_fingerprint(body)}\n{rest}"
+
+
+def run_sh_is_generated(text: str) -> bool:
+    m = _RUN_SH_MARK.search(text)
+    return bool(m) and m.group(1) == _fingerprint(_RUN_SH_MARK.sub("", text, count=1))
+
+
+def write_package(p: Project, graph: Dict[str, Any], *, force: bool = False) -> Dict[str, Any]:
+    """Write the package files from the result path.
+
+    whatran.json and run.sh are regenerated while they are untouched since whatran wrote
+    them, and kept once somebody edited them. The static files (check.py, build_site.py,
+    the workflow, README.md) are written only when missing. --force rewrites everything.
+    """
+    manifest_path = p.root / PACKAGE_MANIFEST
+    written: List[str] = []
+    kept: List[str] = []       # static files that already exist
+    edited: List[str] = []     # generated files somebody changed; left alone
+    existing_manifest = load_manifest(p) if manifest_path.is_file() else None
+    if existing_manifest is not None and not force and not manifest_is_generated(existing_manifest):
+        manifest = existing_manifest
+        edited.append(PACKAGE_MANIFEST)
+    else:
+        manifest = stamp_manifest(export_package(p, graph))
+        if not manifest.get("steps"):
+            return {"written": [], "kept": [], "edited": [], "manifest": manifest, "empty": True}
+        content = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+        if not manifest_path.is_file() or manifest_path.read_text(encoding="utf-8") != content:
+            manifest_path.write_text(content, encoding="utf-8")
+            written.append(PACKAGE_MANIFEST)
+    if not manifest.get("steps"):
+        return {"written": written, "kept": kept, "edited": edited, "manifest": manifest, "empty": True}
+
+    run_sh = p.root / "run.sh"
+    if run_sh.is_file() and not force and not run_sh_is_generated(run_sh.read_text(encoding="utf-8")):
+        edited.append("run.sh")
+    else:
+        content = stamp_run_sh(make_run_sh(graph, manifest))
+        if not run_sh.is_file() or run_sh.read_text(encoding="utf-8") != content:
+            run_sh.write_text(content, encoding="utf-8")
+            run_sh.chmod(0o755)
+            written.append("run.sh")
+
+    for rel, content in (("check.py", CHECK_PY), ("build_site.py", BUILD_SITE_PY),
+                         (".github/workflows/reproduce.yml", REPRODUCE_YML)):
         path = p.root / rel
-        if path.exists() and not args.force:
-            skipped.append(rel)
-            return
+        if path.exists() and not force:
+            kept.append(rel)
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        if executable:
-            path.chmod(0o755)
         written.append(rel)
-
-    put(PACKAGE_MANIFEST, json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-    put("run.sh", make_run_sh(graph, manifest), executable=True)
-    put("check.py", CHECK_PY)
-    put("build_site.py", BUILD_SITE_PY)
-    put(".github/workflows/reproduce.yml", REPRODUCE_YML)
     if not (p.root / "README.md").exists():
-        put("README.md", make_readme(manifest))
+        (p.root / "README.md").write_text(make_readme(manifest), encoding="utf-8")
+        written.append("README.md")
     gi = p.root / ".gitignore"
     existing = gi.read_text(encoding="utf-8") if gi.is_file() else ""
     add = [line for line in ("site/", ".venv/", "analysis/.state/") if line not in existing.splitlines()]
     if add:
         gi.write_text(existing.rstrip("\n") + ("\n" if existing else "") + "\n".join(add) + "\n", encoding="utf-8")
         written.append(".gitignore")
-    for rel in written:
+    return {"written": written, "kept": kept, "edited": edited, "manifest": manifest, "empty": False}
+
+
+# --------------------------------------------------------------------------- #
+# the agent's report: its last message of a turn, kept next to the graph so that
+# what it said can be compared with what ran
+# --------------------------------------------------------------------------- #
+
+REPORT_NAME = "report.md"
+_REPORT_HEAD = re.compile(r"^<!-- whatran:.*?-->\n+", re.S)
+
+
+def mentions_record(text: str, nodes: "OrderedDict[str, Dict[str, Any]]") -> bool:
+    """Does the text name a recorded file or step?"""
+    if not text:
+        return False
+    low = text.lower()
+    for n in nodes.values():
+        if n.get("type") == "artifact" and n.get("path"):
+            path = n["path"].lower()
+            name = os.path.basename(path)
+            if path in low or (len(name) > 5 and name in low):
+                return True
+        elif n.get("type") == "run" and n.get("label") and n["label"].lower() in low:
+            return True
+    return False
+
+
+def write_report(p: Project, text: str) -> bool:
+    """Save the agent's words as analysis/report.md. Returns True when the file changed."""
+    body = (text or "").strip()
+    if not body:
+        return False
+    path = p.ag_dir / REPORT_NAME
+    if path.is_file():
+        old = _REPORT_HEAD.sub("", path.read_text(encoding="utf-8"), count=1).strip()
+        if old == body:
+            return False
+    head = (f"<!-- whatran: what the agent said when its turn ended at {now_iso()}. "
+            "Compare with analysis/graph.json: the graph is what ran. -->\n\n")
+    p.ag_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(head + body + "\n", encoding="utf-8")
+    return True
+
+
+def finish(p: Project, *, report: Optional[str] = None, package: bool = True) -> Dict[str, Any]:
+    """Everything that happens when a turn ends: promote executions to steps, compile the
+    graph, refresh the package, save the report. Safe to repeat."""
+    promoted = promote_executions(p)
+    graph = build_graph(p, verify=True)
+    write_graph(p, graph)
+    draft = export_package(p, graph)
+    (p.ag_dir / "whatran.draft.json").write_text(json.dumps(draft, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    pkg = write_package(p, graph) if package else {"written": [], "kept": [], "edited": [], "empty": True}
+    report_changed = write_report(p, report) if report else False
+    return {"promoted": promoted, "graph": graph, "package": pkg, "report": report_changed}
+
+
+def cmd_package(args: argparse.Namespace) -> int:
+    p = require_project(args)
+    graph = build_graph(p, verify=True)
+    write_graph(p, graph)
+    res = write_package(p, graph, force=args.force)
+    if res["empty"]:
+        raise AgError("nothing to package: no completed runs on the result path (record steps first, then `done`)")
+    manifest = res["manifest"]
+    for rel in res["written"]:
         print(f"wrote   {rel}")
-    for rel in skipped:
+    for rel in res["edited"]:
+        print(f"kept    {rel}  (edited; --force overwrites)")
+    for rel in res["kept"]:
         print(f"kept    {rel}  (exists; --force overwrites)")
     print(f"package: {len(manifest['steps'])} steps, {len(manifest.get('inputs', []))} inputs, "
           f"{len(manifest.get('outputs', []))} checked outputs")
@@ -3062,7 +3593,7 @@ def _add_step_flags(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--params-json", metavar="JSON", help=argparse.SUPPRESS)
     sp.add_argument("--supersedes", metavar="RUN_ID", help="this run replaces an earlier one (kept, marked superseded)")
     sp.add_argument("--note")
-    sp.add_argument("--no-style", action="store_true", help="skip the writing rules for this record")
+    sp.add_argument("--no-style", action="store_true", help="no writing-rule warnings for this record")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3099,7 +3630,7 @@ def build_parser() -> argparse.ArgumentParser:
     rc.add_argument("--supports", action="append", metavar="ID|PATH", help="run id or output file it rests on (repeatable)")
     rc.add_argument("--status", default="tentative", choices=CLAIM_STATUSES, help=hidden)
     rc.add_argument("--note")
-    rc.add_argument("--no-style", action="store_true", help="skip the writing rules for this record")
+    rc.add_argument("--no-style", action="store_true", help="no writing-rule warnings for this record")
     rc.add_argument("--id", help=hidden)
     rc.add_argument("--json", action="store_true", help=hidden)
     rc.set_defaults(func=cmd_claim)
@@ -3110,7 +3641,8 @@ def build_parser() -> argparse.ArgumentParser:
     j.add_argument("--no-style", action="store_true", help=hidden)
     j.set_defaults(func=cmd_reject)
 
-    d = sub.add_parser("done", help="compile the graph, check recorded files, draft the package, say what is next")
+    d = sub.add_parser("done", help="turn executions into steps, compile the graph, check files, write the package")
+    d.add_argument("--no-package", action="store_true", help=hidden)
     d.set_defaults(func=cmd_done)
 
     op = sub.add_parser("open", help="open the graph in the browser")

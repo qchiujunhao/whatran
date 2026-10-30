@@ -6,7 +6,7 @@ per agent is only how execution evidence gets captured.
 
 | agent | how it records | evidence level |
 | --- | --- | --- |
-| Claude Code (this plugin) | hooks capture every Bash command; `whatran.py record "..."` names the steps | observed |
+| Claude Code (this plugin) | hooks capture every Bash command and the end of each turn turns them into steps, compiles the graph and writes the package; nothing to call | observed |
 | Codex | this plugin's skill (`.codex-plugin`); run steps through `python3 analysis/whatran.py run -- CMD`, or add a PostToolUse hook that pipes the hook payload to `hooks/observe.py` | observed |
 | Gemini CLI, other local agents | drop `SKILL.md` into `GEMINI.md` / `AGENTS.md`; use `whatran.py run -- CMD` | observed |
 | ChatGPT / web agents without a shell | project instructions below; emit `analysis/graph.json` directly | declared |

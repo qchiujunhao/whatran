@@ -54,7 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 FORMAT = "analysis-graph/0.1"
 
 AG_DIRNAME = "analysis"

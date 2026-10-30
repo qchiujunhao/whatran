@@ -13,13 +13,16 @@ Treat this as part of completing the analysis; the user does not need to ask.
 ## With a recorded graph (the normal case)
 
 ```bash
-python3 analysis/whatran.py package     # whatran.json, run.sh, check.py, build_site.py, .github/workflows/reproduce.yml
+python3 analysis/whatran.py done        # agents without hooks: steps, graph, package (Claude Code does this at every turn end)
 python3 analysis/whatran.py check       # move results/ aside, bash run.sh, compare, mark the steps replay-verified
 ```
 
-`package` derives everything from the result path of the graph: inputs, the
-completed steps in dependency order (rejected branches excluded), the result
-files with a comparison rule each. `run.sh` is the recorded commands in order.
+The package (`whatran.json`, `run.sh`, `check.py`, `build_site.py`,
+`.github/workflows/reproduce.yml`) is derived from the result path of the graph:
+inputs, the completed steps in dependency order (rejected branches excluded),
+the result files with a comparison rule each. `run.sh` is the recorded commands
+in order. `whatran.json` and `run.sh` are refreshed as the record grows until
+you edit them; after that they are yours (`package --force` regenerates).
 Before `check`:
 
 1. Read `run.sh`. Add dependency installation under "Environment" if the steps

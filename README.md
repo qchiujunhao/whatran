@@ -10,7 +10,8 @@ asking:
 1. **A graph of what actually ran.** `analysis/graph.json` plus a viewer:
    every step with its command, parameters, inputs and outputs (hashed), which
    steps were observed to run, which branches were tried and dropped, and which
-   results the findings rest on.
+   results the findings rest on. Next to it, `analysis/report.md` keeps what the
+   agent said, so the two can be compared.
 2. **A package that reruns.** `run.sh`, `whatran.json`, `check.py` and a CI
    workflow that reruns the result path on a fresh clone, compares the outputs
    with the committed ones, and publishes a result page. A run is marked
@@ -56,28 +57,41 @@ python3 analysis/whatran.py check    # rerun from clean and compare, like CI doe
 
 ## What the agent does
 
-The skill tells the agent to run these as it works; you can run them too.
+In Claude Code, almost nothing. The agent runs `init` once when it starts an
+analysis in a project. From then on hooks capture every command it runs, and
+when each of its turns ends:
+
+- every captured command that produced result files becomes a step, named from
+  the agent's own description of the command, else from what it said before
+  running it, else from the command;
+- a result file made again by a different attempt marks the earlier attempt
+  superseded; an exact repeat is attached to the step it repeats;
+- `analysis/graph.json` is compiled, and the package (`whatran.json`,
+  `run.sh`, `check.py`, `build_site.py`, the CI workflow) is written or
+  refreshed, files you edited by hand are left alone;
+- the agent's last message is saved as `analysis/report.md`.
+
+What remains for the agent is `check`, which reruns the package from clean. A
+few one-line commands improve the record and are optional:
 
 ```bash
-whatran init                                  # once per project; copies whatran.py into analysis/
-whatran record "Detect peaks"                 # after a meaningful step
-whatran claim "Feature 301.1 is higher in group B (p < 0.05)"
+whatran claim "Feature 301.1 is higher in group B (p < 0.05)"     # a finding, attached to the last step
 whatran reject run-detect-peaks-1 --reason "Threshold 1.1 calls noise as peaks"
-whatran done                                  # compile, check files, draft the package
-whatran package                               # whatran.json, run.sh, check.py, build_site.py, CI workflow
+whatran record "Detect peaks"                 # name a step yourself; details are read from the captured command
+whatran done                                  # what the turn end does, for agents without hooks
 whatran check                                 # rerun from clean, compare, mark replay-verified
 ```
 
 `whatran` is the command after `pip install whatran`; without pip it is
 `python3 analysis/whatran.py`, the copy that `init` leaves in the project.
+Outside Claude Code, run steps as `whatran run -- CMD` so they are captured,
+and finish with `done`.
 
-`record` needs only the label. The command that ran was captured already (by
-the Claude Code hooks, or by `whatran run -- CMD` in any other agent), so
-inputs, outputs, code and parameters are read from it; flags such as `--in`,
-`--out`, `--param k=v` override when the guess is wrong. `claim` attaches to
-the last completed run unless told otherwise. `run.sh` is the recorded commands
-in dependency order; review it, add dependency installation if the steps need
-packages, and `check` does the rest.
+`run.sh` is the recorded commands in dependency order; review it, add
+dependency installation if the steps need packages, and `check` does the rest.
+A step that the agent only talks about, with no captured command, stays
+`declared`; a step whose label came from the command rather than from words is
+marked so in the graph.
 
 ### In code: Python and R
 
@@ -119,18 +133,21 @@ agent. The rules follow Simplified Technical English (ASD-STE100): a step label
 starts with an approved verb and has at most 8 words (`Detect peaks`, not
 `Peak detection`); a claim, note or reason has sentences of at most 20 words;
 no pronouns, hedging, intensifiers or passive voice. A record that breaks a rule
-is refused with the fix spelled out. `--no-style` bypasses it for one record;
+is kept, with a warning that spells out the fix; `"style": {"strict": true}`
+refuses instead. `--no-style` silences the warnings for one record;
 `analysis/config.json` can add verbs (`"style": {"verbs": [...]}`), replace the
-list from a file, or disable the rules.
+list from a file, or disable the rules. Labels made automatically from the
+agent's words follow the rules when the words allow it and are kept either way.
 
 Everything else (`log`, `status`, `update`, `publish`, …) is listed by
 `whatran -h`.
 
 ## Three situations
 
-**Starting fresh.** Ask the agent to analyse. It runs `init`, works, records,
-claims, and finishes with `done`, `package`, `check`. Commit and push; CI reruns
-the package on a fresh clone and publishes the result page with the graph.
+**Starting fresh.** Ask the agent to analyse. It runs `init`, works, and
+finishes with `check`; the record and the package grow at the end of each turn.
+Commit and push; CI reruns the package on a fresh clone and publishes the result
+page with the graph.
 
 **Installing halfway through.** Nothing before `init` was captured. The agent
 reruns the earlier steps through `whatran.py run -- CMD` when that is cheap, or
@@ -150,6 +167,7 @@ hands a node's exact inputs, code and parameters to the next session.
 | --- | --- |
 | run `observed` | a recorder saw the command run, its exit status, and the files it changed |
 | run `declared` | only the agent's word; no execution was captured |
+| run `auto` | the step was made from a captured execution without the agent naming it; `label_from` says whether the label came from the agent's description of the command, its words before running it, or the command |
 | artifact `intact` / `modified` / `missing` | whether the file on disk still matches the hash taken when it was recorded |
 | run `replay-verified` | `check` (or CI) reran the packaged path from clean and the outputs matched |
 
@@ -161,8 +179,8 @@ captured. Rejected branches and every captured command stay in the record.
 ## Examples
 
 - `examples/recorded-demo/` — the whole flow on a synthetic peak-detection
-  analysis: record, a rejected branch, claims, package, check. `bash make_demo.sh`
-  rebuilds it from scratch.
+  analysis: captured steps, a rejected branch, claims, package, check.
+  `bash make_demo.sh` rebuilds it from scratch.
 - `examples/pipeline-demo/`, `examples/cancer-classification/`,
   `examples/multi-analysis-demo/` — hand-built packages: the smallest one, a
   real two-path analysis with a [live result page](https://qchiujunhao.github.io/whatran/example/),
@@ -173,7 +191,7 @@ captured. Rejected branches and every captured command stay in the record.
 ```text
 plugins/whatran/
 ├── bin/whatran.py                  the tool: one file, no dependencies, Python 3.9+
-├── hooks/                          session rule + Bash capture (Claude Code)
+├── hooks/                          session rule, Bash capture, turn end (Claude Code)
 ├── skills/record-analysis/         what to record, and when
 ├── skills/package-analysis/        how to package, and what a pass means
 ├── schema/analysis-graph.schema.json

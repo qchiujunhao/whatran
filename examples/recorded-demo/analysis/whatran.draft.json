@@ -3,8 +3,8 @@
     "title": "Synthetic LC-MS pilot",
     "question": "Which features differ between group A and group B in a simulated 12-sample experiment?",
     "findings": [
-      "Feature at m/z 151.1 is higher in group A (Welch p < 0.05)",
-      "Feature at m/z 301.1 is higher in group B (Welch p < 0.05)"
+      "Feature at m/z 301.1 is higher in group B (Welch p < 0.05)",
+      "Feature at m/z 151.1 is higher in group A (Welch p < 0.05)"
     ]
   },
   "inputs": [],
