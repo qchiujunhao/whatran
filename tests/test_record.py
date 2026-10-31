@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -735,6 +736,26 @@ class TestAutomatic(Base):
         self.assertEqual(code, 0, out + err)
         g = json.loads(self.p.graph_path.read_text())
         self.assertEqual(g["summary"]["runs"]["replay_verified"], 2)
+
+    def test_the_packages_own_files_are_never_evidence(self):
+        # the Stop hook writes the package moments before the next command starts; on a fast
+        # machine those files fall inside the mtime window and must still not count as outputs
+        write_transcript(self.transcript, [])
+        self._bash(self._flag("b.csv", 3), "toolu_1")
+        self._stop()
+        now = time.time()
+        os.utime(self.root / "results" / "b.csv", (now - 10, now - 10))
+        for rel in ("whatran.json", "run.sh", "check.py", "build_site.py",
+                    ".github/workflows/reproduce.yml", "README.md", ".gitignore"):
+            fp = self.root / rel
+            self.assertTrue(fp.is_file(), rel)
+            os.utime(fp, (now, now))
+        self._bash(self._flag("c.csv", 4), "toolu_2")
+        files = {f["path"] for f in ag.exec_events(self.p.events())[-1]["files_changed"]}
+        self.assertEqual(files, {"results/c.csv"})
+        self.assertEqual(self._stop(), "")
+        code, out, err = run_ag(["check"], self.root)
+        self.assertEqual(code, 0, out + err)
 
     def test_stop_hook_is_silent_without_a_recording(self):
         with tempfile.TemporaryDirectory() as other:

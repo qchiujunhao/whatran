@@ -70,6 +70,12 @@ STATE_DIRNAME = ".state"
 MTIME_SLACK_PRECISE = 0.2
 MTIME_SLACK_ESTIMATED = 1.5
 
+# files whatran itself writes at the project root: never evidence of a step
+PACKAGE_PATHS = frozenset({
+    "whatran.json", "run.sh", "check.py", "build_site.py",
+    ".github/workflows/reproduce.yml", "README.md", ".gitignore",
+})
+
 NODE_TYPES = ("artifact", "run", "claim")
 RUN_STATUSES = ("completed", "failed", "rejected", "superseded")
 CLAIM_STATUSES = ("tentative", "supported", "rejected")
@@ -485,7 +491,7 @@ class Project:
                     except OSError:
                         continue
                     r = self.rel(fp)
-                    if r in seen:
+                    if r in seen or r in PACKAGE_PATHS:
                         continue
                     seen.add(r)
                     yield r, fp, st

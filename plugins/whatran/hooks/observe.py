@@ -113,11 +113,12 @@ def handle_stop(payload: dict) -> None:
             report = text
     if not grew and report is None:
         return
+    had_package = (p.root / ag.PACKAGE_MANIFEST).is_file()
     res = ag.finish(p, report=report) if grew else {"report": ag.write_report(p, report), "package": {"written": []}}
     size = p.events_path.stat().st_size if p.events_path.is_file() else 0
     sf.write_text(json.dumps({"events_size": size, "ts": time.time()}), encoding="utf-8")
     written = res.get("package", {}).get("written") or []
-    if "whatran.json" in written and "run.sh" in written:
+    if not had_package and "whatran.json" in written and "run.sh" in written:     # first time only
         print(json.dumps({"systemMessage": "whatran: package written (whatran.json, run.sh, check.py, CI workflow). "
                           "`python3 analysis/whatran.py check` reruns it from clean."}))
 

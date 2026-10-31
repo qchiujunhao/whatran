@@ -66,6 +66,9 @@ not captured; inputs are read off the command line (existing files it names)
 or declared, and the recorder verifies they exist and hashes them.
 `outputs_observed` lists which declared outputs were actually seen changing
 with a matching hash.
+The package's own files (`whatran.json`, `run.sh`, `check.py`, `build_site.py`,
+the workflow, and the root `README.md` and `.gitignore`) are never evidence:
+whatran writes them, so no step can claim them, however close in time.
 
 ### The agent's words
 
@@ -119,7 +122,8 @@ Package files that whatran generates (`whatran.json`, `run.sh`) carry a
 fingerprint of their own content. While the file is exactly what whatran wrote
 it is regenerated as the record grows; once someone edits it, it is kept.
 `check.py`, `build_site.py` and the workflow are written only when missing.
-Nothing happens in a project where nothing has run.
+The hook says one line when the package is first created and is silent after
+that. Nothing happens in a project where nothing has run.
 
 ### Nodes
 
