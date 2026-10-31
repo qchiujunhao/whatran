@@ -76,6 +76,10 @@ PACKAGE_PATHS = frozenset({
     ".github/workflows/reproduce.yml", "README.md", ".gitignore",
 })
 
+# a PreToolUse snapshot (path -> mtime, size) is kept for trees up to this many
+# files; beyond that the hook falls back to the mtime window
+SNAPSHOT_MAX_FILES = 50000
+
 NODE_TYPES = ("artifact", "run", "claim")
 RUN_STATUSES = ("completed", "failed", "rejected", "superseded")
 CLAIM_STATUSES = ("tentative", "supported", "rejected")
@@ -490,7 +494,9 @@ class Project:
                         st = fp.stat()
                     except OSError:
                         continue
-                    r = self.rel(fp)
+                    r = os.path.relpath(fp, self.root).replace(os.sep, "/")   # base is resolved: no per-file resolve()
+                    if r.startswith(".."):
+                        r = self.rel(fp)
                     if r in seen or r in PACKAGE_PATHS:
                         continue
                     seen.add(r)

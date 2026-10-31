@@ -723,6 +723,8 @@ class TestAutomatic(Base):
                     transcript_entry("user", tool_result="toolu_2"),
                     transcript_entry("assistant", "results/c.csv is ready.", msg_id="m6")]
         write_transcript(self.transcript, entries)
+        now = time.time()
+        os.utime(self.root / "results" / "b.csv", (now, now))               # as if c1 had only just finished
         self._bash(c2, "toolu_2", "Scale the tripled values by ten")
         (self.root / "run.sh").write_text((self.root / "run.sh").read_text() + "# edited by hand\n")
         self.assertEqual(self._stop(), "")                                    # the package already exists: no message
@@ -738,21 +740,35 @@ class TestAutomatic(Base):
         self.assertEqual(g["summary"]["runs"]["replay_verified"], 2)
 
     def test_the_packages_own_files_are_never_evidence(self):
-        # the Stop hook writes the package moments before the next command starts; on a fast
-        # machine those files fall inside the mtime window and must still not count as outputs
+        # the Stop hook writes the package moments before the next command starts. Neither the
+        # exact diff (PreToolUse seen) nor the mtime window (PreToolUse missed) may claim them.
         write_transcript(self.transcript, [])
         self._bash(self._flag("b.csv", 3), "toolu_1")
         self._stop()
+        pkg = ("whatran.json", "run.sh", "check.py", "build_site.py",
+               ".github/workflows/reproduce.yml", "README.md", ".gitignore")
         now = time.time()
         os.utime(self.root / "results" / "b.csv", (now - 10, now - 10))
-        for rel in ("whatran.json", "run.sh", "check.py", "build_site.py",
-                    ".github/workflows/reproduce.yml", "README.md", ".gitignore"):
-            fp = self.root / rel
-            self.assertTrue(fp.is_file(), rel)
-            os.utime(fp, (now, now))
+        for rel in pkg:
+            self.assertTrue((self.root / rel).is_file(), rel)
+            os.utime(self.root / rel, (now, now))
         self._bash(self._flag("c.csv", 4), "toolu_2")
         files = {f["path"] for f in ag.exec_events(self.p.events())[-1]["files_changed"]}
         self.assertEqual(files, {"results/c.csv"})
+        # the same when the hook only learns of the command afterwards (start time estimated)
+        now = time.time()
+        for rel in ("results/b.csv", "results/c.csv"):
+            os.utime(self.root / rel, (now - 10, now - 10))
+        for rel in pkg:
+            os.utime(self.root / rel, (now, now))
+        c3 = self._flag("d.csv", 5)
+        subprocess.run(c3, shell=True, cwd=self.root, check=True, capture_output=True)
+        hook(self.root, {"session_id": "s1", "cwd": str(self.root), "tool_name": "Bash",
+                         "tool_input": {"command": c3}, "tool_use_id": "toolu_3",
+                         "hook_event_name": "PostToolUse", "duration_ms": 50,
+                         "tool_response": {"stdout": "", "stderr": "", "interrupted": False}})
+        files = {f["path"] for f in ag.exec_events(self.p.events())[-1]["files_changed"]}
+        self.assertEqual(files, {"results/d.csv"})
         self.assertEqual(self._stop(), "")
         code, out, err = run_ag(["check"], self.root)
         self.assertEqual(code, 0, out + err)

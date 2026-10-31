@@ -153,18 +153,26 @@ def handle_tool(payload: dict) -> None:
     if event == "PreToolUse":
         if ag.is_ignored_command(command, p.config):
             return
-        sf.write_text(json.dumps({"start": time.time(), "command": command}), encoding="utf-8")
+        before = p.snapshot()                     # exact diff after the command, no mtime window
+        state = {"start": time.time(), "command": command}
+        if len(before) <= ag.SNAPSHOT_MAX_FILES:
+            state["snapshot"] = before
+        sf.write_text(json.dumps(state), encoding="utf-8")
         return
 
     if event not in ("PostToolUse", "PostToolUseFailure"):
         return
 
     start = None
+    before = None
     if sf.is_file():
         try:
-            start = float(json.loads(sf.read_text(encoding="utf-8")).get("start"))
+            state = json.loads(sf.read_text(encoding="utf-8"))
+            start = float(state.get("start"))
+            if isinstance(state.get("snapshot"), dict):
+                before = {k: tuple(v) for k, v in state["snapshot"].items()}
         except Exception:
-            start = None
+            start, before = None, None
         try:
             sf.unlink()
         except OSError:
@@ -209,7 +217,9 @@ def handle_tool(payload: dict) -> None:
 
     files = None
     truncated = False
-    if start is not None:
+    if before is not None:
+        files, truncated = p.changed_since_snapshot(before)
+    elif start is not None:
         files, truncated = p.changed_files(start - slack)
     if extra_changed:
         files = files or []

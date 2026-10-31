@@ -50,8 +50,8 @@ came to be.
 Three ways to capture evidence, in decreasing strength:
 
 1. **Hooks** (Claude Code). Every Bash tool call is observed: `PreToolUse`
-   records the start time, `PostToolUse` and `PostToolUseFailure` append the
-   `exec` event. Hooks act only inside a project that has
+   records the start time and a snapshot of the watched tree, `PostToolUse`
+   and `PostToolUseFailure` append the `exec` event. Hooks act only inside a project that has
    `analysis/config.json`; elsewhere they exit immediately. The hook is silent
    by default (`observe.nudge` turns on a one-line notice per captured command).
 2. **Wrapper**: `whatran.py run -- CMD` executes the command itself, snapshots
@@ -60,8 +60,10 @@ Three ways to capture evidence, in decreasing strength:
 3. **Direct**: an agent without a shell writes `graph.json` in the schema. Its
    runs are `declared` by construction.
 
-File changes are detected by comparing modification time and size (wrapper:
-exact snapshot diff; hooks: files modified since the command started). Reads are
+File changes are detected by comparing each file's modification time and size
+with a snapshot taken just before the command, by hooks and wrapper alike. Only
+when a hook learns of a command after it ran, or the tree is too large to
+snapshot, does it fall back to files modified since the estimated start. Reads are
 not captured; inputs are read off the command line (existing files it names)
 or declared, and the recorder verifies they exist and hashes them.
 `outputs_observed` lists which declared outputs were actually seen changing
